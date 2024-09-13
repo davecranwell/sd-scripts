@@ -40,3 +40,9 @@ imagesize==1.4.1
 rich==13.7.0
 # for kohya_ss library
 -e .
+
+# New dependencies for training_api.py
+Flask==2.2.5
+flasgger==0.9.5
+jsonschema==3.2.0
+pytest==8.3.3

@@ -6,3 +6,5 @@ venv
 build
 .vscode
 wandb
+*.ckpt
+*.db

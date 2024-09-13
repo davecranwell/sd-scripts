@@ -45,11 +45,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from training_session_manager import TrainingSessionManager
 
 class NetworkTrainer:
     def __init__(self):
         self.vae_scale_factor = 0.18215
         self.is_sdxl = False
+        self.session_manager = TrainingSessionManager()
 
     # TODO 他のスクリプトと共通化する
     def generate_step_logs(
@@ -135,7 +137,8 @@ class NetworkTrainer:
         train_util.sample_images(accelerator, args, epoch, global_step, device, vae, tokenizer, text_encoder, unet)
 
     def train(self, args):
-        session_id = random.randint(0, 2**32)
+        session_id = args.session_id if args.session_id else random.randint(0, 2**32)
+        self.session_manager.update_training_session(session_id, 0, 0, 0.0)  # epoch 0, step 0, initial loss 0.0    
         training_started_at = time.time()
         train_util.verify_training_args(args)
         train_util.prepare_dataset_args(args, True)
@@ -925,6 +928,9 @@ class NetworkTrainer:
 
                     self.sample_images(accelerator, args, None, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
 
+                    if accelerator.is_main_process:
+                        self.session_manager.update_training_session(session_id, epoch + 1, global_step, loss.detach().item())
+
                     # 指定ステップごとにモデルを保存
                     if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
                         accelerator.wait_for_everyone()
@@ -998,7 +1004,8 @@ class NetworkTrainer:
 
             logger.info("model saved.")
 
-
+            self.session_manager.complete_training_session(session_dbid)
+        
 def setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
 
