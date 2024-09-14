@@ -20,6 +20,7 @@ class TrainingSessionManager:
         self.current_process = None  # To keep track of the current training process
         self.current_session_id = None  # Track the current session ID
         self.lock = threading.Lock()  # Create a lock for managing training sessions
+        self.download_progress = 0  # Class variable to store download progress percentage
 
     def initialize_database(self):
         cursor = self.conn.cursor()
@@ -222,7 +223,7 @@ class TrainingSessionManager:
         headers = {}
         
         # Add the Authorization header only if the URL is from civitai.com
-        if "civitai.com" in checkpoint_url:
+        if "civitai.com" in checkpoint_url.lower():
             headers['Authorization'] = f'Bearer {civitai_key}'
 
         response = requests.get(checkpoint_url, headers=headers, stream=True)
@@ -231,16 +232,15 @@ class TrainingSessionManager:
             raise Exception(f"Failed to download checkpoint: {response.text}")
 
         total_size = int(response.headers.get('content-length', 0))
-        with open(output_path, 'wb') as file, tqdm(
-            desc=output_path,
-            total=total_size,
-            unit='iB',
-            unit_scale=True,
-            unit_divisor=1024,
-        ) as bar:
+        downloaded_size = 0  # Track the amount downloaded
+
+        with open(output_path, 'wb') as file:
             for data in response.iter_content(chunk_size=1024):
                 file.write(data)
-                bar.update(len(data))
+                downloaded_size += len(data)
+                # Calculate and update the download progress percentage
+                self.download_progress = (downloaded_size / total_size) * 100 if total_size > 0 else 100
+                print(f"Download progress: {self.download_progress:.2f}%")  # Optional: Print progress to console
 
     def start_training(self, config) -> int:
         with self.lock:  # Acquire the lock to prevent concurrent training starts
@@ -254,3 +254,26 @@ class TrainingSessionManager:
             threading.Thread(target=self.download_and_start_training, args=(config, session_id)).start()
             
             return session_id
+
+    def get_total_progress(self, session_id) -> float:
+        # Get the total number of epochs from the training config
+        training_session = self.get_training_session(session_id)
+        if training_session is None or 'config' not in training_session:
+            return 0.0  # Return 0 if the session is not found or config is missing
+
+        total_epochs = training_session['config'].get('epoch', 0)  # Get total epochs from config
+        if total_epochs <= 0:
+            return 0.0  # Return 0 if there are no epochs to train
+
+        # Get the highest epoch number completed from the epoch_losses table
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT MAX(epoch) FROM epoch_losses WHERE session_id = ?', (session_id,))
+        highest_epoch = cursor.fetchone()[0] or 0  # Default to 0 if no epochs found
+
+        # Calculate training progress
+        training_progress = (highest_epoch / total_epochs) * 100 if total_epochs > 0 else 0
+
+        # Combine download progress and training progress
+        overall_progress = (self.download_progress + training_progress) / 2  # Average of both progress
+
+        return overall_progress
