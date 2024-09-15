@@ -10,8 +10,8 @@ import subprocess
 import requests
 
 @pytest.fixture(autouse=True)
-def mock_download_and_start_training():
-    with patch.object(TrainingSessionManager, 'download_and_start_training') as mock:
+def mock_download_and_run():
+    with patch.object(TrainingSessionManager, 'download_and_run') as mock:
         yield mock
 
 @pytest.fixture(scope='module')
@@ -33,15 +33,15 @@ def client(session_manager):
     with training_api_app.test_client() as client:
         yield client
 
-def test_create_training_session(mock_download_and_start_training, client, session_manager):
-    mock_download_and_start_training.return_value = None
+def test_create_training_session(mock_download_and_run, client, session_manager):
+    mock_download_and_run.return_value = None
 
     response = client.post('/start_training', json={
         "checkpoint_url": "https://civitai.com/checkpoint"
     })
 
     assert response.status_code == 202
-    mock_download_and_start_training.assert_called_once()
+    mock_download_and_run.assert_called_once()
 
     data = json.loads(response.data)
     session_id = data['session_id']
@@ -78,12 +78,12 @@ def test_complete_training_session(client, session_manager):
     assert completed_session is not None
     assert completed_session['is_completed'] is 1
 
-# def test_run_training_error_handling(mock_download_and_start_training, client, session_manager):
+# def test_run_training_error_handling(mock_download_and_run, client, session_manager):
 #     # Create a mock for the subprocess.Popen
 #     mock_process = MagicMock()
 #     mock_process.communicate.return_value = (b'output', b'error')  # Simulate output and error
 #     mock_process.returncode = 1  # Simulate a non-zero exit code
-#     mock_download_and_start_training.return_value = mock_process  # Mock Popen to return the mock process
+#     mock_download_and_run.return_value = mock_process  # Mock Popen to return the mock process
 
 #     # Call the start_training method
 #     session_id = session_manager.start_training({
@@ -102,7 +102,7 @@ def test_complete_training_session(client, session_manager):
 #     # frankly ridiculous but it works
 #     time.sleep(2) 
 
-#     mock_download_and_start_training.assert_called_once()
+#     mock_download_and_run.assert_called_once()
  
 #     # Fetch the completed training session
 #     completed_session = session_manager.get_training_session(session_id)
@@ -164,12 +164,12 @@ def test_download_checkpoint_without_auth(mock_get, session_manager):
     # Check that the request was made without the Authorization header
     mock_get.assert_called_once_with(checkpoint_url, headers={}, stream=True)
 
-def test_api_responsiveness_during_download(mock_download_and_start_training, client, session_manager):
+def test_api_responsiveness_during_download(mock_download_and_run, client, session_manager):
     # Mock the download_checkpoint to simulate a long-running download
     def mock_download(*args, **kwargs):
         time.sleep(1)  # Simulate a long download time
     
-    mock_download_and_start_training.side_effect = mock_download
+    mock_download_and_run.side_effect = mock_download
 
     # Start the training session, which will trigger the download
     response = client.post('/start_training', json={
@@ -178,7 +178,7 @@ def test_api_responsiveness_during_download(mock_download_and_start_training, cl
 
 
     assert response.status_code == 202  # Check that the training session started
-    assert mock_download_and_start_training.call_count == 1
+    assert mock_download_and_run.call_count == 1
 
     # While the download is in progress, check if we can still access other endpoints
     response = client.get('/training')

@@ -8,6 +8,9 @@ import requests
 from tqdm import tqdm
 import random  # Ensure random is imported
 
+WORKING_FOLDER_ROOT = 'runs'
+PRETRAINED_MODEL_PATH = 'pretrained'
+
 class TrainingSessionManager:
     def __init__(self, db_connection=None):
         if db_connection:
@@ -79,7 +82,7 @@ class TrainingSessionManager:
 
         return session_id
 
-    def update_training_session(self, session_id, epoch=None, step=None, loss=None):
+    def update_training_session(self, session_id, **kwargs):
         cursor = self.conn.cursor()
         
         update_query = '''
@@ -94,9 +97,21 @@ class TrainingSessionManager:
         ))
         
         # Record the epoch loss if provided
-        if epoch is not None and loss is not None:
-            self.record_epoch_loss(session_id, epoch, loss)
-        
+        if 'epoch' in kwargs and 'loss' in kwargs:
+            self.record_epoch_loss(session_id, kwargs['epoch'], kwargs['loss'])
+
+        # If new_config is provided, update the config field
+        if 'new_config' in kwargs:
+            training_session = self.get_training_session(session_id)
+            if training_session:
+                existing_config = training_session['config']
+                existing_config.update(kwargs['new_config'])  # Merge new properties into existing config
+                cursor.execute('''
+                    UPDATE training_sessions
+                    SET config = ?
+                    WHERE id = ?
+                ''', (json.dumps(existing_config), session_id))  # Convert to JSON string before storing
+
         self.conn.commit()
 
     def record_epoch_loss(self, session_id, epoch, loss):
@@ -201,11 +216,11 @@ class TrainingSessionManager:
         if hasattr(self, 'conn'):
             self.conn.close()
 
-    def download_and_start_training(self, config, session_id):
+    def download_and_run(self, config, session_id):
         try:        # Download the checkpoint file in a separate thread
             civitai_key = config.get("civitai_key")  # Assume the API key is passed in the config
             checkpoint_url = config.get("checkpoint_url")  # URL for the checkpoint file
-            output_path = os.path.join(config.get("output_dir"), "checkpoint_file.ckpt")  # Define the output path
+            output_path = os.path.join(config.get("output_dir"), "pretrained_model.ckpt")  # Define the output path
             
             # Remove the civitai_key and checkpoint_url from the config as these are not known to the sd-scripts
             config.pop("civitai_key", None)
@@ -242,16 +257,20 @@ class TrainingSessionManager:
                 self.download_progress = (downloaded_size / total_size) * 100 if total_size > 0 else 100
                 print(f"Download progress: {self.download_progress:.2f}%")  # Optional: Print progress to console
 
-    def start_training(self, config) -> int:
+    def start_training(self, session_id) -> int:
+        # Get the training config
+        training_session = self.get_training_session(session_id)
+        if training_session is None or 'config' not in training_session:
+            raise Exception("Training session not found or config is missing.")
+
+        config = training_session['config']
+
         with self.lock:  # Acquire the lock to prevent concurrent training starts
             if self.current_process is not None:
                 raise Exception("A training session is already in progress.")  # Prevent starting a new session
-            
-            # Create a new training session
-            session_id = self.create_training_session(config)
 
             # Start the training in a separate thread
-            threading.Thread(target=self.download_and_start_training, args=(config, session_id)).start()
+            threading.Thread(target=self.download_and_run, args=(config, session_id)).start()
             
             return session_id
 

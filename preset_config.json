@@ -1,8 +1,8 @@
 {
-    "logging_dir": "/workspace/logs/training",
-    "output_dir": "/workspace/kohya_ss/outputs/model",
-    "pretrained_model_name_or_path": "/workspace/model.safetensors",
-    "train_data_dir": "/workspace/kohya_ss/outputs/img",
+    "logging_dir": "logs/training",
+    "output_dir": "outputs/model",
+    "pretrained_model_name_or_path": "pretrained/model.safetensors",
+    "train_data_dir": "train_data",
 
     "network_module": "networks.lora",
     "adaptive_noise_scale": 0,
