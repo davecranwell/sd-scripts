@@ -230,6 +230,9 @@ def create_app(session_manager=None):
             config['train_data_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['train_data_dir'])
             config['pretrained_model_name_or_path'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['pretrained_model_name_or_path'])
 
+            for dir_path in [config['output_dir'], config['logging_dir'], config['train_data_dir'], config['pretrained_model_name_or_path']]:
+                os.makedirs(dir_path, exist_ok=True)
+
             session_manager.update_training_session(session_id=session_id, new_config=config)
 
             return jsonify({"message": "Training session created", "session_id": session_id, "config": config}), 201
