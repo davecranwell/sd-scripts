@@ -8,6 +8,7 @@ import os
 import threading
 from io import BytesIO  # Import BytesIO for in-memory file handling
 
+WORKING_FOLDER_ROOT = 'runs'
 UPLOAD_FOLDER = 'uploads'
 
 # Progress callback function
@@ -54,7 +55,6 @@ def create_app(session_manager=None):
 
     from training_session_manager import TrainingSessionManager
     
-
     swagger = Swagger(app, template={
         "info": {
             "title": "SD-scripts Training API",
@@ -178,7 +178,6 @@ def create_app(session_manager=None):
                 'schema': {
                     'type': 'object',
                     'properties': {
-                        'learning_rate': {'type': 'number'},
                         'civitai_key': {'type': 'string'},  # New field for API key
                         'checkpoint_url': {'type': 'string'},  # New field for checkpoint URL
                     }
@@ -204,7 +203,6 @@ def create_app(session_manager=None):
         
         # Define permitted keys
         permitted_keys = {
-            'learning_rate',
             'civitai_key',
             'checkpoint_url'
         }
@@ -222,13 +220,18 @@ def create_app(session_manager=None):
         # Merge preset values with user-provided config
         config = {**preset_config, **data}
         
-        # override a couple of values
-        config['unet_lr'] = config['learning_rate']
-        config['text_encoder_lr'] = config['learning_rate']
-        
         try:
             # Create a training session using the session manager
             session_id = session_manager.create_training_session(config)
+
+            # Now we need to modify some of the paths in the config with the session_id
+            config['output_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['output_dir'])
+            config['logging_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['logging_dir'])
+            config['train_data_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['train_data_dir'])
+            config['pretrained_model_name_or_path'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['pretrained_model_name_or_path'])
+
+            session_manager.update_training_session(session_id=session_id, new_config=config)
+
             return jsonify({"message": "Training session created", "session_id": session_id, "config": config}), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 400  # Return a 400 Bad Request with the error message
@@ -277,62 +280,10 @@ def create_app(session_manager=None):
 
         try:
             # Start training using the session manager
-            session_manager.start_training(training_session['config'])
+            session_manager.start_training(training_session['id'])
             return jsonify({"message": "Training started", "session_id": id, "config": training_session['config']}), 202
         except Exception as e:
             return jsonify({"error": str(e)}), 400  # Return a 400 Bad Request with the error message
-
-    """
-    @app.route('/update_training/<int:session_id>', methods=['PUT'])
-    @swag_from({
-        'parameters': [
-            {
-                'name': 'session_id',
-                'in': 'path',
-                'type': 'integer',
-                'required': True,
-                'description': 'The ID of the training session to update'
-            },
-            {
-                'name': 'body',
-                'in': 'body',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'epoch': {'type': 'integer'},
-                        'loss': {'type': 'number'}
-                    }
-                }
-            }
-        ],
-        'responses': {
-            200: {
-                'description': 'Training session updated successfully',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'session_id': {'type': 'integer'}
-                    }
-                }
-            },
-            404: {
-                'description': 'Training session not found'
-            }
-        }
-    })
-    def update_training(session_id):
-        data = request.json
-        epoch = data.get('epoch')
-        loss = data.get('loss')
-
-        # Call the update method in the session manager
-        try:
-            session_manager.update_training_session(session_id, epoch=epoch, loss=loss)
-            return jsonify({"message": "Training session updated", "session_id": session_id}), 200
-        except Exception as e:
-            return jsonify({"error": str(e)}), 404
-    """
 
     @app.route('/training/<int:id>', methods=['DELETE'])
     @swag_from({
@@ -366,6 +317,9 @@ def create_app(session_manager=None):
         }
     })
     def abort_training(id):
+        if upload_thread is not None:
+            upload_thread.stop()
+
         # Check if the training session exists
         training_session = session_manager.get_training_session(id)
         if training_session is None:
@@ -447,7 +401,7 @@ def create_app(session_manager=None):
         file.seek(0)  # Reset the file pointer if needed
         
         # Create a directory for the training session if it doesn't exist
-        session_upload_folder = os.path.join(UPLOAD_FOLDER, str(id))
+        session_upload_folder = os.path.join(WORKING_FOLDER_ROOT, str(id), UPLOAD_FOLDER)
         os.makedirs(session_upload_folder, exist_ok=True)
 
         # Save file in background thread to avoid blocking the request
@@ -459,42 +413,6 @@ def create_app(session_manager=None):
         upload_thread.start()
 
         return jsonify({"message": "Upload started", "filename": filename}), 202
-   
-    """
-    @app.route('/progress/<int:session_id>', methods=['GET'])
-    @swag_from({
-        'parameters': [
-            {
-                'name': 'session_id',
-                'in': 'path',
-                'type': 'integer',
-                'required': True,
-                'description': 'The ID of the training session'
-            }
-        ],
-        'responses': {
-            200: {
-                'description': 'Training session progress',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'session_id': {'type': 'integer'},
-                        'progress': {'type': 'number'}
-                    }
-                }
-            },
-            404: {
-                'description': 'Training session not found'
-            }
-        }
-    })
-    def get_progress(session_id):
-        try:
-            progress = session_manager.get_total_progress(session_id)
-            return jsonify({"session_id": session_id, "progress": progress}), 200
-        except Exception as e:
-            return jsonify({"error": str(e)}), 404
-    """
 
     return app
 

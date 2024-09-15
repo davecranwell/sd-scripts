@@ -138,7 +138,7 @@ class NetworkTrainer:
 
     def train(self, args):
         session_id = args.session_id if args.session_id else random.randint(0, 2**32)
-        self.session_manager.update_training_session(session_id, 0, 0, 0.0)  # epoch 0, step 0, initial loss 0.0    
+        self.session_manager.update_training_session(session_id=session_id, epoch=0, step=0, loss=0.0)  # epoch 0, step 0, initial loss 0.0    
         training_started_at = time.time()
         train_util.verify_training_args(args)
         train_util.prepare_dataset_args(args, True)
@@ -1032,7 +1032,7 @@ class NetworkTrainer:
                     self.sample_images(accelerator, args, None, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
 
                     if accelerator.is_main_process:
-                        self.session_manager.update_training_session(session_id, epoch + 1, global_step, loss.detach().item())
+                        self.session_manager.update_training_session(session_id=session_id, epoch=epoch + 1, step=global_step, loss=loss.detach().item())
 
                     # 指定ステップごとにモデルを保存
                     if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
