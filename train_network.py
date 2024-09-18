@@ -1109,7 +1109,7 @@ class NetworkTrainer:
 
             logger.info("model saved.")
 
-            self.session_manager.complete_training_session(session_dbid)
+            self.session_manager.complete_training_session(session_id)
         
 def setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()

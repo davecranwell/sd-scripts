@@ -4,9 +4,11 @@ import os
 import subprocess
 import threading
 import json
-import requests
-from tqdm import tqdm
 import random  # Ensure random is imported
+import pycurl  # Import pycurl for downloading files
+import shutil  # Import shutil for checking disk space
+import certifi
+from utils import AbortableThread  # Import AbortableThread from utils
 
 WORKING_FOLDER_ROOT = 'runs'
 PRETRAINED_MODEL_PATH = 'pretrained'
@@ -20,10 +22,11 @@ class TrainingSessionManager:
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.script_path = os.path.join(os.path.dirname(__file__), 'sdxl_train_network.py')
         self.initialize_database()
-        self.current_process = None  # To keep track of the current training process
+        self.training_process = None  # To keep track of the current training process
         self.current_session_id = None  # Track the current session ID
         self.lock = threading.Lock()  # Create a lock for managing training sessions
         self.download_progress = 0  # Class variable to store download progress percentage
+        self.training_thread = None
 
     def initialize_database(self):
         cursor = self.conn.cursor()
@@ -57,8 +60,27 @@ class TrainingSessionManager:
     def create_training_session(self, config):
         cursor = self.conn.cursor()
         
+        # Load preset values from the external JSON file
+        preset_config_path = os.path.join(os.path.dirname(__file__), 'preset_config.json')
+        with open(preset_config_path, 'r') as f:
+            preset_config = json.load(f)
+
+        # Merge preset values with user-provided config
+        config = {**preset_config, **config}
+
         # Generate a unique random ID
         session_id = random.randint(0, 2**32)
+
+        # Modify paths in the config with the session_id
+        config['output_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['output_dir'])
+        config['logging_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['logging_dir'])
+        config['train_data_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['train_data_dir'])
+        # Uncomment if you want to modify pretrained_model_name_or_path as well
+        # config['pretrained_model_name_or_path'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['pretrained_model_name_or_path'])
+
+        # Create necessary directories
+        for dir_path in [config['output_dir'], config['logging_dir'], config['train_data_dir'], config['pretrained_model_name_or_path']]:
+            os.makedirs(dir_path, exist_ok=True)
         
         # Ensure the generated ID is unique
         while cursor.execute('SELECT COUNT(*) FROM training_sessions WHERE id = ?', (session_id,)).fetchone()[0] > 0:
@@ -132,8 +154,8 @@ class TrainingSessionManager:
         SET end_time = ?, is_completed = ?, last_error = ?
         WHERE id = ?
         '''
-        
-        cursor.execute(update_query, (time.time(), True, error_message, session_id))
+    
+        cursor.execute(update_query, (time.time(), error_message is None, error_message, session_id))
         self.conn.commit()
 
     def get_all_training_sessions(self) -> list[dict]:
@@ -186,23 +208,31 @@ class TrainingSessionManager:
             elif isinstance(value, list):
                 cmd.extend([f"--{key}"] + [str(v) for v in value])
        
-        self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = self.current_process.communicate()
+        self.training_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = self.training_process.communicate()
         
         # Check the exit code
-        if self.current_process.returncode != 0:
+        if self.training_process.returncode != 0:
             error_message = stderr.decode().strip()  # Capture the error message
             print(f"Error occurred during training: {error_message}")
             self.complete_training_session(session_id, error_message)  # Pass the error message
         else:
-            # Handle successful completion if needed
-            # we choose not to because the training script will call the method to complete the training session
-            pass
+            self.complete_training_session(session_id)
 
     def abort_training(self, session_id):
-        if self.current_process:
-            self.current_process.terminate()  # Terminate the subprocess
-            self.complete_training_session(session_id)  # Mark the session as completed
+        training_session = self.get_training_session(session_id)
+
+         # Check if the training session is already completed
+        if training_session['is_completed']:
+            raise Exception(f"Cannot abort a completed training session.")
+
+        if self.training_process:
+            self.training_process.terminate()  # Terminate the subprocess if runnin
+
+        if self.training_thread is not None and self.training_thread.is_alive():
+            self.training_thread.stop()  # Stop the training thread
+        
+        self.complete_training_session(session_id, "Training aborted")  # Mark the session as completed
 
     def get_epoch_losses(self, session_id) -> list[dict]:
         cursor = self.conn.cursor()
@@ -220,57 +250,104 @@ class TrainingSessionManager:
         try:        # Download the checkpoint file in a separate thread
             civitai_key = config.get("civitai_key")  # Assume the API key is passed in the config
             checkpoint_url = config.get("checkpoint_url")  # URL for the checkpoint file
-            output_path = os.path.join(config.get("output_dir"), "pretrained_model.ckpt")  # Define the output path
+            output_path = config.get("pretrained_model_name_or_path")
             
             # Remove the civitai_key and checkpoint_url from the config as these are not known to the sd-scripts
             config.pop("civitai_key", None)
             config.pop("checkpoint_url", None)
 
-            self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id)
-            self.run_training(config, session_id)
-            self.complete_training_session(session_id)
+            downloaded = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id)
+            if downloaded:
+                self.run_training(config, session_id)
         except Exception as e:
             error_message = str(e)  # Capture the error message
-            print(f"Error during download or training: {error_message}")
+            print(f"Error during download and training: {error_message}")
             self.complete_training_session(session_id, error_message)  # Pass the error message
 
+    
     def download_checkpoint(self, civitai_key, checkpoint_url, output_path, session_id):
-        headers = {}
+        headers = []
         
         # Add the Authorization header only if the URL is from civitai.com
         if "civitai.com" in checkpoint_url.lower():
-            headers['Authorization'] = f'Bearer {civitai_key}'
+            headers.append(f'Authorization: Bearer {civitai_key}')
 
-        response = requests.get(checkpoint_url, headers=headers, stream=True)
+        # Set the file path for the downloaded checkpoint
+        file_path = os.path.join(output_path, "model.safetensors")
         
-        if response.status_code != 200:
-            raise Exception(f"Failed to download checkpoint: {response.text}")
+        # Initialize curl
+        curl = pycurl.Curl()
+        if "civitai.com" in checkpoint_url.lower():
+            curl.setopt(curl.URL, checkpoint_url + "&token=" + civitai_key)
+        else:
+            curl.setopt(curl.URL, checkpoint_url)
+        curl.setopt(curl.HTTPHEADER, headers)
+        curl.setopt(curl.CAINFO, certifi.where())
+        curl.setopt(curl.VERBOSE, True)
+        curl.setopt(curl.FOLLOWLOCATION, True)
+        curl.setopt(pycurl.USERAGENT, b"Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 
-        total_size = int(response.headers.get('content-length', 0))
-        downloaded_size = 0  # Track the amount downloaded
+        # Open the file for writing
+        with open(file_path, 'wb') as file:
+            # Initialize download progress
+            self.download_progress = 0
 
-        with open(output_path, 'wb') as file:
-            for data in response.iter_content(chunk_size=1024):
-                file.write(data)
-                downloaded_size += len(data)
-                # Calculate and update the download progress percentage
-                self.download_progress = (downloaded_size / total_size) * 100 if total_size > 0 else 100
-                print(f"Download progress: {self.download_progress:.2f}%")  # Optional: Print progress to console
+            # Define a progress callback function
+            def progress_callback(total_to_download, downloaded, total_to_upload, uploaded):
+                if total_to_download > 0:
+                    self.download_progress = (downloaded / total_to_download) * 100
+                    # print(f"Downloaded {downloaded} of {total_to_download} bytes ({self.download_progress:.2f}%)")
+                return 1 if self.training_thread._stop_event.is_set() else 0  # Return 0 to continue the transfer
+
+            curl.setopt(curl.WRITEDATA, file)  # Write directly to the file
+            curl.setopt(curl.NOPROGRESS, False)  # Enable progress meter
+            curl.setopt(curl.XFERINFOFUNCTION, progress_callback)  # Set the progress callback
+
+            try:
+                curl.perform()
+                response_code = curl.getinfo(curl.RESPONSE_CODE)
+                if response_code != 200:
+                    raise Exception(f"Failed to download checkpoint: HTTP {response_code}")
+
+                total_size = int(curl.getinfo(curl.CONTENT_LENGTH_DOWNLOAD))
+                
+                # Check available disk space
+                total, used, free = shutil.disk_usage(output_path)
+                if free < total_size:
+                    raise Exception(f"Not enough disk space to download the checkpoint. Required: {total_size}, Available: {free}")
+
+                print(f"Downloaded {total_size} bytes to {file_path}")  # Confirm file write
+                self.download_progress = 100  # Set download progress to 100% after completion
+            except Exception as e:
+                print(f"Error during download: {e}")
+            finally:
+                curl.close()
+                return True if not self.training_thread._stop_event.is_set() else False
+
 
     def start_training(self, session_id) -> int:
         # Get the training config
         training_session = self.get_training_session(session_id)
+
+        # Check if the training session is already in progress or completed
+        if training_session['is_completed']:
+            raise Exception(f"Cannot start a completed training session")
+
+        if self.training_process is not None:
+            raise Exception(f"Cannot start training while another session is in progress.")
+
         if training_session is None or 'config' not in training_session:
             raise Exception("Training session not found or config is missing.")
 
         config = training_session['config']
 
         with self.lock:  # Acquire the lock to prevent concurrent training starts
-            if self.current_process is not None:
+            if self.training_thread is not None and self.training_thread.is_alive():
                 raise Exception("A training session is already in progress.")  # Prevent starting a new session
 
             # Start the training in a separate thread
-            threading.Thread(target=self.download_and_run, args=(config, session_id)).start()
+            self.training_thread = AbortableThread(self.download_and_run, config, session_id)
+            self.training_thread.start()
             
             return session_id
 

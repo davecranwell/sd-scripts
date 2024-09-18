@@ -1,100 +1,67 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, stream_with_context, Response
 from werkzeug.utils import secure_filename
 from flasgger import Swagger, swag_from
 import argparse  # Import argparse for command line arguments
-import datetime
 import json  # Ensure json is imported
 import os
-import threading
-from io import BytesIO  # Import BytesIO for in-memory file handling
 
 WORKING_FOLDER_ROOT = 'runs'
 UPLOAD_FOLDER = 'uploads'
 
-# Progress callback function
-def progress_callback(loaded, total_size):
-    if total_size != -1:
-        print(f"Completed: {loaded} of {total_size} bytes")
-    else:
-        print(f"Completed: {loaded} bytes")
-
-class UploadThread(threading.Thread):
-    def __init__(self, file, output_path, progress_callback, total_length):
-        super().__init__()
-        self.file = file  # Keep the file object
-        self.output_path = output_path
-        self.progress_callback = progress_callback
-        self.total_length = total_length  # Store the total length
-        self._stop_event = threading.Event()
-
-    def run(self):
-        uploaded = 0
-
-        try:
-            with open(self.output_path, 'wb') as f:
-                while True:
-                    chunk = self.file.read(4096)  # Read in chunks
-                    if not chunk or self._stop_event.is_set():
-                        break
-
-                    f.write(chunk)
-                    uploaded += len(chunk)
-                    self.progress_callback(uploaded, self.total_length)  # Use the stored total length
-        
-        except Exception as e:
-            print(f"Error: {e}")
-
-    def stop(self):
-        self._stop_event.set()
-
-
 def create_app(session_manager=None):
     app = Flask(__name__)
    
-    upload_thread = None
-
     from training_session_manager import TrainingSessionManager
     
-    swagger = Swagger(app, template={
-        "info": {
-            "title": "SD-scripts Training API",
-            "description": "API for training SD SDXL Loras",
-        },
-    })
+    swagger_config = {
+        "headers": [],
+        "openapi": "3.0.2",
+        "title": "SD-scripts Training API",
+        "version": '',
+        "termsOfService": "",
+        "swagger_ui": True,
+        "description": "API for training SD SDXL Loras",
+    }
+
+    Swagger(app, config=swagger_config, merge=True)
 
     if session_manager is None:
         session_manager = TrainingSessionManager()
 
     @app.route('/training', methods=['GET'])
     @swag_from({
-        'description': 'Retrieve a list of all training sessions with epoch losses.',
+        'summary': 'Retrieve a list of all training sessions with epoch losses.',
         'responses': {
             200: {
                 'description': 'List of all training sessions with epoch losses',
-                'schema': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'id': {'type': 'integer'},
-                            'start_time': {'type': 'number'},
-                            'end_time': {'type': 'number'},
-                            'config': {
+                'content': {
+                    'application/json': {
+                        'schema': {
+                            'type': 'array',
+                            'items': {
                                 'type': 'object',
-                                'additionalProperties': {}
-                            },
-                            'current_epoch': {'type': 'integer'},
-                            'current_step': {'type': 'integer'},
-                            'current_loss': {'type': 'number'},
-                            'last_updated': {'type': 'number'},
-                            'is_completed': {'type': 'boolean'},
-                            'epoch_losses': {
-                                'type': 'array',
-                                'items': {
-                                    'type': 'object',
-                                    'properties': {
-                                        'epoch': {'type': 'integer'},
-                                        'loss': {'type': 'number'}
+                                'properties': {
+                                    'id': {'type': 'integer'},
+                                    'start_time': {'type': 'number'},
+                                    'end_time': {'type': 'number'},
+                                    'config': {
+                                        'type': 'object',
+                                        'additionalProperties': {}
+                                    },
+                                    'current_epoch': {'type': 'integer'},
+                                    'current_step': {'type': 'integer'},
+                                    'current_loss': {'type': 'number'},
+                                    'last_updated': {'type': 'number'},
+                                    'is_completed': {'type': 'boolean'},
+                                    'epoch_losses': {
+                                        'type': 'array',
+                                        'items': {
+                                            'type': 'object',
+                                            'properties': {
+                                                'epoch': {'type': 'integer'},
+                                                'loss': {'type': 'number'}
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -110,44 +77,50 @@ def create_app(session_manager=None):
             training['epoch_losses'] = session_manager.get_epoch_losses(training['id'])  # Fetch epoch losses
         return jsonify([dict(training) for training in trainings])
 
-    @app.route('/training/<int:id>', methods=['GET'])
+    @app.route('/training/<int:session_id>', methods=['GET'])
     @swag_from({
-        'description': 'Retrieve details of a specific training session by ID.',
+        'summary': 'Retrieve details of a specific training session by ID.',
         'parameters': [
             {
-                'name': 'id',
+                'name': 'session_id',
                 'in': 'path',
-                'type': 'integer',
                 'required': True,
-                'description': 'The ID of the training session'
+                'description': 'The ID of the training session',
+                'schema': {
+                    'type': 'integer'
+                }
             }
         ],
         'responses': {
             200: {
                 'description': 'Training session details with epoch losses',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'id': {'type': 'integer'},
-                        'start_time': {'type': 'number'},
-                        'end_time': {'type': 'number'},
-                        'config': {
+                'content': {
+                    'application/json': {
+                        'schema': {
                             'type': 'object',
-                            'additionalProperties': {}
-                        },
-                        'current_epoch': {'type': 'integer'},
-                        'current_step': {'type': 'integer'},
-                        'current_loss': {'type': 'number'},
-                        'last_updated': {'type': 'number'},
-                        'progress': {'type': 'number'},
-                        'is_completed': {'type': 'boolean'},
-                        'epoch_losses': {
-                            'type': 'array',
-                            'items': {
-                                'type': 'object',
-                                'properties': {
-                                    'epoch': {'type': 'integer'},
-                                    'loss': {'type': 'number'}
+                            'properties': {
+                                'id': {'type': 'integer'},
+                                'start_time': {'type': 'number'},
+                                'end_time': {'type': 'number'},
+                                'config': {
+                                    'type': 'object',
+                                    'additionalProperties': {}
+                                },
+                                'current_epoch': {'type': 'integer'},
+                                'current_step': {'type': 'integer'},
+                                'current_loss': {'type': 'number'},
+                                'last_updated': {'type': 'number'},
+                                'progress': {'type': 'number'},
+                                'is_completed': {'type': 'boolean'},
+                                'epoch_losses': {
+                                    'type': 'array',
+                                    'items': {
+                                        'type': 'object',
+                                        'properties': {
+                                            'epoch': {'type': 'integer'},
+                                            'loss': {'type': 'number'}
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -159,40 +132,46 @@ def create_app(session_manager=None):
             }
         }
     })
-    def get_training(id):
-        training = session_manager.get_training_session(id)
-        progress = session_manager.get_total_progress(id)
+    def get_training(session_id):
+        training = session_manager.get_training_session(session_id)
+        progress = session_manager.get_total_progress(session_id)
         if training is None:
-            return jsonify({"error": "Training not found"}), 404
-        training['epoch_losses'] = session_manager.get_epoch_losses(id)  # Fetch epoch losses
+            return jsonify({"error": "Training session not found"}), 404
+
+        training['epoch_losses'] = session_manager.get_epoch_losses(session_id)  # Fetch epoch losses
         training['progress'] = progress
         return jsonify(dict(training))
 
     @app.route('/training', methods=['POST'])
     @swag_from({
-        'description': 'Create a new training session without starting it immediately.',
-        'parameters': [
-            {
-                'name': 'body',
-                'in': 'body',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'civitai_key': {'type': 'string'},  # New field for API key
-                        'checkpoint_url': {'type': 'string'},  # New field for checkpoint URL
+        'summary': 'Create a new training session without starting it immediately.',
+        'requestBody': {
+            'required': True,
+            'content': {
+                'application/json': {
+                    'schema': {
+                        'type': 'object',
+                        'properties': {
+                            'civitai_key': {'type': 'string'},
+                            'checkpoint_url': {'type': 'string'}
+                        }
                     }
                 }
             }
-        ],
+        },
         'responses': {
             201: {
                 'description': 'Training session created successfully',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'session_id': {'type': 'integer'},
-                        'config': {'type': 'object'}
+                'content': {
+                    'application/json': {
+                        'schema': {
+                            'type': 'object',
+                            'properties': {
+                                'message': {'type': 'string'},
+                                'session_id': {'type': 'integer'},
+                                'config': {'type': 'object'}
+                            }
+                        }
                     }
                 }
             }
@@ -212,54 +191,41 @@ def create_app(session_manager=None):
         if invalid_keys:
             return jsonify({"error": f"Invalid configuration provided: {', '.join(invalid_keys)}"}), 400
 
-        # Load preset values from the external JSON file
-        preset_config_path = os.path.join(os.path.dirname(__file__), 'preset_config.json')
-        with open(preset_config_path, 'r') as f:
-            preset_config = json.load(f)
-
-        # Merge preset values with user-provided config
-        config = {**preset_config, **data}
-        
         try:
             # Create a training session using the session manager
-            session_id = session_manager.create_training_session(config)
+            session_id = session_manager.create_training_session(data)
 
-            # Now we need to modify some of the paths in the config with the session_id
-            config['output_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['output_dir'])
-            config['logging_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['logging_dir'])
-            config['train_data_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['train_data_dir'])
-            config['pretrained_model_name_or_path'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['pretrained_model_name_or_path'])
-
-            for dir_path in [config['output_dir'], config['logging_dir'], config['train_data_dir'], config['pretrained_model_name_or_path']]:
-                os.makedirs(dir_path, exist_ok=True)
-
-            session_manager.update_training_session(session_id=session_id, new_config=config)
-
-            return jsonify({"message": "Training session created", "session_id": session_id, "config": config}), 201
+            return jsonify({"message": "Training session created", "session_id": session_id}), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 400  # Return a 400 Bad Request with the error message
 
-    @app.route('/training/<int:id>/start', methods=['POST'])
+    @app.route('/training/<int:session_id>/start', methods=['POST'])
     @swag_from({
-        'description': 'Start the training for a specific training session by ID.',
+        'summary': 'Start the training for a specific training session by ID.',
         'parameters': [
             {
-                'name': 'id',
+                'name': 'session_id',
                 'in': 'path',
-                'type': 'integer',
                 'required': True,
-                'description': 'The ID of the training session to start'
+                'description': 'The ID of the training session to start',
+                'schema': {
+                    'type': 'integer'
+                }
             }
         ],
         'responses': {
             202: {
                 'description': 'Training started successfully',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'session_id': {'type': 'integer'},
-                        'config': {'type': 'object'}
+                'content': {
+                    'application/json': {
+                        'schema': {
+                            'type': 'object',
+                            'properties': {
+                                'message': {'type': 'string'},
+                                'session_id': {'type': 'integer'},
+                                'config': {'type': 'object'}
+                            }
+                        }
                     }
                 }
             },
@@ -268,46 +234,45 @@ def create_app(session_manager=None):
             }
         }
     })
-    def start_training(id):
+    def start_training(session_id):
         # Check if the training session exists
-        training_session = session_manager.get_training_session(id)
+        training_session = session_manager.get_training_session(session_id)
         if training_session is None:
             return jsonify({"error": "Training session not found"}), 404
-
-        # Check if the training session is already in progress or completed
-        if training_session['is_completed']:
-            return jsonify({"error": "Cannot start a completed training session."}), 400
-
-        if session_manager.current_process is not None:
-            return jsonify({"error": "Cannot start training while another session is in progress."}), 400
 
         try:
             # Start training using the session manager
             session_manager.start_training(training_session['id'])
-            return jsonify({"message": "Training started", "session_id": id, "config": training_session['config']}), 202
+            return jsonify({"message": "Training started", "session_id": session_id, "config": training_session['config']}), 202
         except Exception as e:
             return jsonify({"error": str(e)}), 400  # Return a 400 Bad Request with the error message
 
-    @app.route('/training/<int:id>', methods=['DELETE'])
+    @app.route('/training/<int:session_id>', methods=['DELETE'])
     @swag_from({
-        'description': 'Abort a training session by ID.',
+        'summary': 'Abort a training session by ID.',
         'parameters': [
             {
-                'name': 'id',
+                'name': 'session_id',
                 'in': 'path',
-                'type': 'integer',
                 'required': True,
-                'description': 'The ID of the training session to abort'
+                'description': 'The ID of the training session to abort',
+                'schema': {
+                    'type': 'integer'
+                }
             }
         ],
         'responses': {
             200: {
                 'description': 'Training session aborted successfully',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'session_id': {'type': 'integer'}
+                'content': {
+                    'application/json': {
+                        'schema': {
+                            'type': 'object',
+                            'properties': {
+                                'message': {'type': 'string'},
+                                'session_id': {'type': 'integer'}
+                            }
+                        }
                     }
                 }
             },
@@ -319,52 +284,68 @@ def create_app(session_manager=None):
             }
         }
     })
-    def abort_training(id):
-        if upload_thread is not None:
-            upload_thread.stop()
-
+    def abort_training(session_id):
         # Check if the training session exists
-        training_session = session_manager.get_training_session(id)
+        training_session = session_manager.get_training_session(session_id)
         if training_session is None:
             return jsonify({"error": "Training session not found"}), 404
 
-        # Check if the training session is already completed
-        if training_session['is_completed']:
-            return jsonify({"error": "Cannot abort a completed training session."}), 400
-
         try:
-            session_manager.abort_training(id)  # Abort the training session using the session manager
-            return jsonify({"message": "Training session aborted", "session_id": id}), 200
+            session_manager.abort_training(session_id)  # Abort the training session using the session manager
+            return jsonify({"message": "Training session aborted", "session_id": session_id}), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 400  # Return a 400 Bad Request with the error message
 
-    @app.route('/training/<int:id>/upload', methods=['POST'])
+    @app.route('/training/<int:session_id>/upload', methods=['POST'])
     @swag_from({
-        'description': 'Upload files for a specific training session by ID.',
+        'summary': 'Upload files for a specific training session by ID.',
+        'requestBody': {
+            'required': True,
+            'content': {
+                'multipart/form-data': {
+                    'schema': {
+                        'type': 'object',
+                        'properties': {
+                            'files': {
+                                'type': 'array',
+                                'items': {
+                                    'type': 'string',
+                                    'format': 'binary'
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         'parameters': [
             {
-                'name': 'id',
+                'name': 'session_id',
                 'in': 'path',
-                'type': 'integer',
                 'required': True,
-                'description': 'The ID of the training session to upload files for'
+                'description': 'The ID of the training session to upload files for',
+                'schema': {
+                    'type': 'integer'
+                }
             },
-            {
-                'name': 'file',
-                'in': 'formData',
-                'type': 'file',
-                'required': True,
-                'description': 'The file to upload'
-            }
         ],
         'responses': {
-            202: {
-                'description': 'Upload started successfully',
-                'schema': {
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'filename': {'type': 'string'}
+            200: {
+                'description': 'Upload completed successfully',
+                'content': {
+                    'application/json': {
+                        'schema': {
+                            'type': 'object',
+                            'properties': {
+                                'message': {'type': 'string'},
+                                'filenames': {
+                                    'type': 'array',
+                                    'items': {
+                                        'type': 'string'
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -376,46 +357,56 @@ def create_app(session_manager=None):
             }
         }
     })
-    def upload_file(id):
-        # Check if the training session exists
-        training_session = session_manager.get_training_session(id)
+    def upload_file(session_id):
+        training_session = session_manager.get_training_session(session_id)
         if training_session is None:
             return jsonify({"error": "Training session not found"}), 404
 
-        # Check if the training session is already in progress or completed
         if training_session['is_completed']:
             return jsonify({"error": "Cannot upload files to a completed training session."}), 400
 
-        if session_manager.current_process is not None:
-            return jsonify({"error": "Cannot upload files while a training session is in progress."}), 400
-
-        if 'file' not in request.files:
+        if 'files' not in request.files:
             return jsonify({"error": "No file part"}), 400
 
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({"error": "No selected file"}), 400
+        files = request.files.getlist('files')
+        if len(files) == 0 or len(files) > 100:
+            return jsonify({"error": "You must upload between 1 and 100 files."}), 400
 
-        # Get the content length
-        total_length = request.content_length
+        def handle_upload():
+            uploaded_filenames = []
+            for file in files:
+                if file.filename == '':
+                    yield json.dumps({"error": "One or more files have no selected filename."}) + '\n'
+                    return
 
-        # Create a BytesIO object to wrap the file content
-        file_stream = BytesIO(file.read())  # Read the file content into memory
-        file.seek(0)  # Reset the file pointer if needed
-        
-        # Create a directory for the training session if it doesn't exist
-        session_upload_folder = os.path.join(WORKING_FOLDER_ROOT, str(id), UPLOAD_FOLDER)
-        os.makedirs(session_upload_folder, exist_ok=True)
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(training_session['config']['train_data_dir'], filename)
 
-        # Save file in background thread to avoid blocking the request
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(session_upload_folder, filename)
+                try:
+                    with open(file_path, 'wb') as f:
+                        chunk_size = 4096
+                        uploaded = 0
+                        while True:
+                            chunk = file.read(chunk_size)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            uploaded += len(chunk)
+                            yield json.dumps({
+                                "filename": filename,
+                                "uploaded": uploaded,
+                                "total": file.content_length
+                            }) + '\n'
+                    uploaded_filenames.append(filename)
+                except Exception as e:
+                    yield json.dumps({"error": f"Error uploading {filename}: {str(e)}"}) + '\n'
 
-        # Pass the file object directly to the UploadThread for streaming
-        upload_thread = UploadThread(file_stream, file_path, progress_callback, total_length)  # Pass the BytesIO object
-        upload_thread.start()
+            yield json.dumps({
+                "message": "Upload completed",
+                "filenames": uploaded_filenames
+            }) + '\n'
 
-        return jsonify({"message": "Upload started", "filename": filename}), 202
+        return Response(stream_with_context(handle_upload()), content_type='application/json')
 
     return app
 
