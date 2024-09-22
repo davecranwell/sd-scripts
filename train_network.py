@@ -928,8 +928,7 @@ class NetworkTrainer:
 
                     self.sample_images(accelerator, args, None, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
 
-                    if accelerator.is_main_process:
-                        self.session_manager.update_training_session(session_id=session_id, epoch=epoch + 1, step=global_step, loss=loss.detach().item())
+                  
 
                     # 指定ステップごとにモデルを保存
                     if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
@@ -984,7 +983,7 @@ class NetworkTrainer:
                         train_util.save_and_remove_state_on_epoch_end(args, accelerator, epoch + 1)
 
             self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
-
+            self.session_manager.update_training_session(session_id=session_id, epoch=epoch + 1, step=global_step, loss=loss.detach().item())
             # end of epoch
 
         # metadata["ss_epoch"] = str(num_train_epochs)
