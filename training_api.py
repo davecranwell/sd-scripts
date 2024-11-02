@@ -28,6 +28,10 @@ def create_app(session_manager=None):
     if session_manager is None:
         session_manager = TrainingSessionManager()
 
+    @app.route('/', methods=['GET'])
+    def root():
+        return "OK"
+
     @app.route('/training', methods=['GET'])
     @swag_from({
         'summary': 'Retrieve a list of all training sessions with epoch losses.',
