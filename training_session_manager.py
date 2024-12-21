@@ -8,6 +8,7 @@ import random  # Ensure random is imported
 import pycurl  # Import pycurl for downloading files
 import shutil  # Import shutil for checking disk space
 import certifi
+import requests
 from utils import AbortableThread  # Import AbortableThread from utils
 
 WORKING_FOLDER_ROOT = 'runs'
@@ -69,7 +70,7 @@ class TrainingSessionManager:
         config = {**preset_config, **config}
 
         # Generate a unique random ID
-        session_id = random.randint(0, 2**32)
+        session_id = config.get('id', random.randint(0, 2**32))
 
         # Modify paths in the config with the session_id
         config['output_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['output_dir'])
@@ -122,6 +123,12 @@ class TrainingSessionManager:
         if 'epoch' in kwargs and 'loss' in kwargs:
             self.record_epoch_loss(session_id, kwargs['epoch'], kwargs['loss'])
 
+        if 'max_train_epochs' in kwargs:
+            self.fire_webhook(session_id, kwargs)
+
+        # Fire webhook call with an object that is passed directly to the webhook post body
+        self.fire_webhook(session_id, kwargs)
+
         # If new_config is provided, update the config field
         if 'new_config' in kwargs:
             training_session = self.get_training_session(session_id)
@@ -134,7 +141,17 @@ class TrainingSessionManager:
                     WHERE id = ?
                 ''', (json.dumps(existing_config), session_id))  # Convert to JSON string before storing
 
+       
         self.conn.commit()
+
+    def fire_webhook(self, session_id, data):
+        # TODO: Implement webhook firing
+        training_session = self.get_training_session(session_id)
+        if training_session and 'webhook_url' in training_session['config']:
+            webhook_url = training_session['config']['webhook_url']
+            
+            # Call webhook with GET request
+            requests.post(webhook_url, json=data)
 
     def record_epoch_loss(self, session_id, epoch, loss):
         cursor = self.conn.cursor()
@@ -157,6 +174,9 @@ class TrainingSessionManager:
     
         cursor.execute(update_query, (time.time(), error_message is None, error_message, session_id))
         self.conn.commit()
+
+        # Fire webhook call
+        self.fire_webhook(session_id, {"status": "training_completed"}) if error_message is None else self.fire_webhook(session_id, {"status": "training_completed", "error_message": error_message})
 
     def get_all_training_sessions(self) -> list[dict]:
         cursor = self.conn.cursor()
@@ -207,10 +227,13 @@ class TrainingSessionManager:
                 cmd.extend([f"--{key}", str(value)])
             elif isinstance(value, list):
                 cmd.extend([f"--{key}"] + [str(v) for v in value])
-       
+
         self.training_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = self.training_process.communicate()
         
+        # Fire webhook call
+        self.fire_webhook(session_id, {"status": "training_started"})
+
         # Check the exit code
         if self.training_process.returncode != 0:
             error_message = stderr.decode().strip()  # Capture the error message
@@ -250,13 +273,14 @@ class TrainingSessionManager:
         try:        # Download the checkpoint file in a separate thread
             civitai_key = config.get("civitai_key")  # Assume the API key is passed in the config
             checkpoint_url = config.get("checkpoint_url")  # URL for the checkpoint file
+            checkpoint_filename = config.get("checkpoint_filename")
             output_path = config.get("pretrained_model_name_or_path")
             
             # Remove the civitai_key and checkpoint_url from the config as these are not known to the sd-scripts
             config.pop("civitai_key", None)
             config.pop("checkpoint_url", None)
 
-            downloaded = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id)
+            downloaded = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename)
             if downloaded:
                 self.run_training(config, session_id)
         except Exception as e:
@@ -265,15 +289,18 @@ class TrainingSessionManager:
             self.complete_training_session(session_id, error_message)  # Pass the error message
 
     
-    def download_checkpoint(self, civitai_key, checkpoint_url, output_path, session_id):
+    def download_checkpoint(self, civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename):
         headers = []
         
+        # Fire webhook call
+        self.fire_webhook(session_id, {"status": "downloading_checkpoint"})
+
         # Add the Authorization header only if the URL is from civitai.com
         if "civitai.com" in checkpoint_url.lower():
             headers.append(f'Authorization: Bearer {civitai_key}')
 
         # Set the file path for the downloaded checkpoint
-        file_path = os.path.join(output_path, "model.safetensors")
+        file_path = os.path.join(output_path, checkpoint_filename)
         
         # Initialize curl
         curl = pycurl.Curl()
@@ -318,6 +345,8 @@ class TrainingSessionManager:
 
                 print(f"Downloaded {total_size} bytes to {file_path}")  # Confirm file write
                 self.download_progress = 100  # Set download progress to 100% after completion
+                # Fire webhook call 
+                self.fire_webhook(session_id, {"status": "downloaded_checkpoint", "checkpoint_filename": checkpoint_filename})
             except Exception as e:
                 print(f"Error during download: {e}")
             finally:
