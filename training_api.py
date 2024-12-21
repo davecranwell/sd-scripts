@@ -156,8 +156,11 @@ def create_app(session_manager=None):
                     'schema': {
                         'type': 'object',
                         'properties': {
+                            'id': {'type': 'string'},
+                            'webhook_url': {'type': 'string'},
                             'civitai_key': {'type': 'string'},
-                            'checkpoint_url': {'type': 'string'}
+                            'checkpoint_url': {'type': 'string'},
+                            'checkpoint_filename': {'type': 'string'}
                         }
                     }
                 }
@@ -186,8 +189,11 @@ def create_app(session_manager=None):
         
         # Define permitted keys
         permitted_keys = {
+            'id',
+            'webhook_url',
             'civitai_key',
-            'checkpoint_url'
+            'checkpoint_url',
+            'checkpoint_filename'
         }
         
         # Validate incoming data

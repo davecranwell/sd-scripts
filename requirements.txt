@@ -47,4 +47,5 @@ flasgger==0.9.7.1
 jsonschema==3.2.0
 pytest==8.3.3
 pycurl==7.45.3
+requests
 

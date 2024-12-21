@@ -138,7 +138,7 @@ class NetworkTrainer:
 
     def train(self, args):
         session_id = args.session_id if args.session_id else random.randint(0, 2**32)
-        self.session_manager.update_training_session(session_id=session_id, epoch=0, step=0, loss=0.0)  # epoch 0, step 0, initial loss 0.0    
+       
         training_started_at = time.time()
         train_util.verify_training_args(args)
         train_util.prepare_dataset_args(args, True)
@@ -547,6 +547,9 @@ class NetworkTrainer:
         if (args.save_n_epoch_ratio is not None) and (args.save_n_epoch_ratio > 0):
             args.save_every_n_epochs = math.floor(num_train_epochs / args.save_n_epoch_ratio) or 1
 
+        self.session_manager.update_training_session(session_id=session_id, epoch=0, step=0, loss=0.0, max_train_epochs=num_train_epochs)  # epoch 0, step 0, initial loss 0.0    
+
+    
         # 学習する
         # TODO: find a way to handle total batch size when there are multiple datasets
         total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -1087,8 +1090,8 @@ class NetworkTrainer:
                     if args.save_state:
                         train_util.save_and_remove_state_on_epoch_end(args, accelerator, epoch + 1)
 
-            self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
             self.session_manager.update_training_session(session_id=session_id, epoch=epoch + 1, step=global_step, loss=loss.detach().item())
+            self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
             # end of epoch
 
         # metadata["ss_epoch"] = str(num_train_epochs)
