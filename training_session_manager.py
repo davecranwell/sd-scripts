@@ -37,6 +37,8 @@ class TrainingSessionManager:
         CREATE TABLE IF NOT EXISTS training_sessions (
             id INTEGER PRIMARY KEY,
             start_time REAL,
+            remaining INTEGER,
+            status TEXT,
             end_time REAL,
             config TEXT,
             is_completed BOOLEAN,
@@ -108,26 +110,34 @@ class TrainingSessionManager:
     def update_training_session(self, session_id, **kwargs):
         cursor = self.conn.cursor()
         
-        update_query = '''
+        # Build dynamic update query based on kwargs
+        update_fields = ['last_updated = ?']
+        params = [time.time()]
+
+        if 'status' in kwargs:
+            update_fields.append('status = ?')
+            params.append(kwargs['status'])
+        
+        if 'remaining' in kwargs:
+            update_fields.append('remaining = ?')
+            params.append(kwargs['remaining'])
+        
+        update_query = f'''
         UPDATE training_sessions
-        SET last_updated = ?
+        SET {', '.join(update_fields)}
         WHERE id = ?
         '''
         
-        cursor.execute(update_query, (
-            time.time(),
-            session_id
-        ))
+        # append session_id last so it can be used in the WHERE clause
+        params.append(session_id)
+        cursor.execute(update_query, tuple(params))
         
         # Record the epoch loss if provided
         if 'epoch' in kwargs and 'loss' in kwargs:
             self.record_epoch_loss(session_id, kwargs['epoch'], kwargs['loss'])
 
-        if 'max_train_epochs' in kwargs:
-            self.fire_webhook(session_id, kwargs)
-
         # Fire webhook call with an object that is passed directly to the webhook post body
-        self.fire_webhook(session_id, kwargs)
+        self.fire_webhook(session_id)
 
         # If new_config is provided, update the config field
         if 'new_config' in kwargs:
@@ -151,7 +161,9 @@ class TrainingSessionManager:
             webhook_url = training_session['config']['webhook_url']
             
             # Call webhook with GET request
-            requests.post(webhook_url, json=data)
+            # convert training_session to json
+            training_session_json = json.dumps(training_session)
+            requests.post(webhook_url, json=training_session_json)
 
     def record_epoch_loss(self, session_id, epoch, loss):
         cursor = self.conn.cursor()
@@ -168,15 +180,15 @@ class TrainingSessionManager:
         
         update_query = '''
         UPDATE training_sessions
-        SET end_time = ?, is_completed = ?, last_error = ?
+        SET end_time = ?, is_completed = ?, last_error = ?, status = ?
         WHERE id = ?
-        '''
+        ''' 
     
-        cursor.execute(update_query, (time.time(), error_message is None, error_message, session_id))
+        cursor.execute(update_query, (time.time(), error_message is None, error_message, "complete", session_id))
         self.conn.commit()
 
         # Fire webhook call
-        self.fire_webhook(session_id, {"status": "training_completed"}) if error_message is None else self.fire_webhook(session_id, {"status": "training_completed", "error_message": error_message})
+        self.fire_webhook(session_id)
 
     def get_all_training_sessions(self) -> list[dict]:
         cursor = self.conn.cursor()
@@ -232,7 +244,7 @@ class TrainingSessionManager:
         stdout, stderr = self.training_process.communicate()
         
         # Fire webhook call
-        self.fire_webhook(session_id, {"status": "training_started"})
+        self.fire_webhook(session_id)
 
         # Check the exit code
         if self.training_process.returncode != 0:
@@ -280,78 +292,137 @@ class TrainingSessionManager:
             config.pop("civitai_key", None)
             config.pop("checkpoint_url", None)
 
-            downloaded = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename)
-            if downloaded:
+            downloaded_images = self.download_images(session_id)
+            
+            downloaded_checkpoint = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename)
+           
+            if downloaded_images and downloaded_checkpoint:
                 self.run_training(config, session_id)
         except Exception as e:
             error_message = str(e)  # Capture the error message
             print(f"Error during download and training: {error_message}")
             self.complete_training_session(session_id, error_message)  # Pass the error message
 
-    
-    def download_checkpoint(self, civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename):
-        headers = []
-        
-        # Fire webhook call
-        self.fire_webhook(session_id, {"status": "downloading_checkpoint"})
 
-        # Add the Authorization header only if the URL is from civitai.com
-        if "civitai.com" in checkpoint_url.lower():
-            headers.append(f'Authorization: Bearer {civitai_key}')
+    def download_images(self, session_id):
+        training_session = self.get_training_session(session_id)
+        if not training_session or 'config' not in training_session:
+            raise Exception("Training session not found or config is missing")
 
-        # Set the file path for the downloaded checkpoint
-        file_path = os.path.join(output_path, checkpoint_filename)
+        config = training_session['config']
+        images_url = config.get('images_url')
+        if not images_url:
+            raise Exception("No images URL provided in config")
+
+        train_data_dir = config.get('train_data_dir')
+        if not train_data_dir:
+            raise Exception("No train_data_dir specified in config")
+
+        # Download to a temporary zip file
+        zip_path = os.path.join(train_data_dir, 'images.zip')
         
+        self._download_file(
+            url=images_url,
+            output_path=zip_path,
+            session_id=session_id,
+            status_prefix="downloading_images"
+        )
+        
+        # Unzip the downloaded file
+        shutil.unpack_archive(zip_path, train_data_dir)
+        os.remove(zip_path)  # Clean up zip file after extraction
+        
+        return True
+
+    def _download_file(self, url, output_path, headers=None, session_id=None, status_prefix="downloading"):
+        """
+        Generic file download function using pycurl
+        
+        Args:
+            url (str): URL to download from
+            output_path (str): Full path where to save the file
+            headers (list, optional): List of HTTP headers
+            session_id (int, optional): Training session ID for progress updates
+            status_prefix (str, optional): Prefix for status updates (e.g., "downloading_checkpoint")
+        
+        Returns:
+            bool: True if download completed successfully, False if aborted
+        """
+        if session_id:
+            self.update_training_session(session_id, status=f"{status_prefix}_started")
+            self.fire_webhook(session_id)
+
+        # Create output directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
         # Initialize curl
         curl = pycurl.Curl()
-        if "civitai.com" in checkpoint_url.lower():
-            curl.setopt(curl.URL, checkpoint_url + "&token=" + civitai_key)
-        else:
-            curl.setopt(curl.URL, checkpoint_url)
-        curl.setopt(curl.HTTPHEADER, headers)
+        curl.setopt(curl.URL, url)
+        if headers:
+            curl.setopt(curl.HTTPHEADER, headers)
         curl.setopt(curl.CAINFO, certifi.where())
         curl.setopt(curl.VERBOSE, True)
         curl.setopt(curl.FOLLOWLOCATION, True)
         curl.setopt(pycurl.USERAGENT, b"Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 
-        # Open the file for writing
-        with open(file_path, 'wb') as file:
-            # Initialize download progress
+        with open(output_path, 'wb') as file:
             self.download_progress = 0
 
-            # Define a progress callback function
             def progress_callback(total_to_download, downloaded, total_to_upload, uploaded):
                 if total_to_download > 0:
                     self.download_progress = (downloaded / total_to_download) * 100
-                    # print(f"Downloaded {downloaded} of {total_to_download} bytes ({self.download_progress:.2f}%)")
-                return 1 if self.training_thread._stop_event.is_set() else 0  # Return 0 to continue the transfer
+                return 1 if self.training_thread._stop_event.is_set() else 0
 
-            curl.setopt(curl.WRITEDATA, file)  # Write directly to the file
-            curl.setopt(curl.NOPROGRESS, False)  # Enable progress meter
-            curl.setopt(curl.XFERINFOFUNCTION, progress_callback)  # Set the progress callback
+            curl.setopt(curl.WRITEDATA, file)
+            curl.setopt(curl.NOPROGRESS, False)
+            curl.setopt(curl.XFERINFOFUNCTION, progress_callback)
 
             try:
                 curl.perform()
                 response_code = curl.getinfo(curl.RESPONSE_CODE)
                 if response_code != 200:
-                    raise Exception(f"Failed to download checkpoint: HTTP {response_code}")
+                    raise Exception(f"Failed to download file: HTTP {response_code}")
 
                 total_size = int(curl.getinfo(curl.CONTENT_LENGTH_DOWNLOAD))
                 
                 # Check available disk space
-                total, used, free = shutil.disk_usage(output_path)
+                total, used, free = shutil.disk_usage(os.path.dirname(output_path))
                 if free < total_size:
-                    raise Exception(f"Not enough disk space to download the checkpoint. Required: {total_size}, Available: {free}")
+                    raise Exception(f"Not enough disk space. Required: {total_size}, Available: {free}")
 
-                print(f"Downloaded {total_size} bytes to {file_path}")  # Confirm file write
-                self.download_progress = 100  # Set download progress to 100% after completion
-                # Fire webhook call 
-                self.fire_webhook(session_id, {"status": "downloaded_checkpoint", "checkpoint_filename": checkpoint_filename})
+                print(f"Downloaded {total_size} bytes to {output_path}")
+                self.download_progress = 100
+
+                if session_id:
+                    self.update_training_session(session_id, status=f"{status_prefix}_completed")
+                    self.fire_webhook(session_id)
+                    
+                return True
             except Exception as e:
                 print(f"Error during download: {e}")
+                if session_id:
+                    self.update_training_session(session_id, status=f"{status_prefix}_failed")
+                    self.fire_webhook(session_id)
+                raise
             finally:
                 curl.close()
-                return True if not self.training_thread._stop_event.is_set() else False
+
+    def download_checkpoint(self, civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename):
+        headers = []
+        
+        if "civitai.com" in checkpoint_url.lower():
+            headers.append(f'Authorization: Bearer {civitai_key}')
+            checkpoint_url = checkpoint_url + "&token=" + civitai_key
+
+        file_path = os.path.join(output_path, checkpoint_filename)
+       
+        return self._download_file(
+            url=checkpoint_url,
+            output_path=file_path,
+            headers=headers,
+            session_id=session_id,
+            status_prefix="downloading_checkpoint"
+        )
 
 
     def start_training(self, session_id) -> int:
