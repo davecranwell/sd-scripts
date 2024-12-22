@@ -508,8 +508,7 @@ class NetworkTrainer:
         if (args.save_n_epoch_ratio is not None) and (args.save_n_epoch_ratio > 0):
             args.save_every_n_epochs = math.floor(num_train_epochs / args.save_n_epoch_ratio) or 1
 
-        self.session_manager.update_training_session(session_id=session_id, epoch=0, step=0, loss=0.0, max_train_epochs=num_train_epochs)  # epoch 0, step 0, initial loss 0.0    
-
+       
     
         # 学習する
         # TODO: find a way to handle total batch size when there are multiple datasets
@@ -745,6 +744,9 @@ class NetworkTrainer:
         progress_bar = tqdm(range(args.max_train_steps), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps")
         global_step = 0
 
+        self.session_manager.update_training_session(session_id=session_id, epoch=0, step=0, loss=0.0, max_train_epochs=num_train_epochs, remaining=progress_bar.format_dict['remaining'])  # epoch 0, step 0, initial loss 0.0    
+
+
         noise_scheduler = DDPMScheduler(
             beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, clip_sample=False
         )
@@ -930,7 +932,7 @@ class NetworkTrainer:
                     global_step += 1
 
                     self.sample_images(accelerator, args, None, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
-
+                    
                   
 
                     # 指定ステップごとにモデルを保存
