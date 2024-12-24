@@ -112,7 +112,7 @@
     "shuffle_caption": false,
     "stop_text_encoder_training": 0,
     "text_encoder_lr": 0.0004,
-    "train_batch_size": 1,
+    "train_batch_size": 2,
     "train_norm": false,
     "train_on_input": true,
     "training_comment": "",
