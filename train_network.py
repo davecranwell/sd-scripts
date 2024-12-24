@@ -744,8 +744,15 @@ class NetworkTrainer:
         progress_bar = tqdm(range(args.max_train_steps), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps")
         global_step = 0
 
-        self.session_manager.update_training_session(session_id=session_id, epoch=0, step=0, loss=0.0, max_train_epochs=num_train_epochs, remaining=progress_bar.format_dict['remaining'])  # epoch 0, step 0, initial loss 0.0    
-
+        self.session_manager.update_training_session(
+            status='training_progress',
+            session_id=session_id,
+            epoch=0,
+            step=0,
+            loss=0.0,
+            max_train_epochs=num_train_epochs,
+            remaining=progress_bar.format_dict['remaining']
+        ) 
 
         noise_scheduler = DDPMScheduler(
             beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, clip_sample=False
@@ -932,8 +939,6 @@ class NetworkTrainer:
                     global_step += 1
 
                     self.sample_images(accelerator, args, None, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
-                    
-                  
 
                     # 指定ステップごとにモデルを保存
                     if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
@@ -987,7 +992,14 @@ class NetworkTrainer:
                     if args.save_state:
                         train_util.save_and_remove_state_on_epoch_end(args, accelerator, epoch + 1)
 
-            self.session_manager.update_training_session(session_id=session_id, epoch=epoch + 1, step=global_step, loss=loss.detach().item())
+            self.session_manager.update_training_session(
+                status='training_progress', 
+                session_id=session_id, 
+                epoch=epoch + 1, 
+                step=global_step, 
+                loss=loss.detach().item(), 
+                remaining=progress_bar.format_dict['remaining']
+            )
             self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
             # end of epoch
 

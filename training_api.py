@@ -45,7 +45,7 @@ def create_app(session_manager=None):
                             'items': {
                                 'type': 'object',
                                 'properties': {
-                                    'id': {'type': 'integer'},
+                                    'id': {'type': 'string'},
                                     'start_time': {'type': 'number'},
                                     'end_time': {'type': 'number'},
                                     'config': {
@@ -81,7 +81,7 @@ def create_app(session_manager=None):
             training['epoch_losses'] = session_manager.get_epoch_losses(training['id'])  # Fetch epoch losses
         return jsonify([dict(training) for training in trainings])
 
-    @app.route('/training/<int:session_id>', methods=['GET'])
+    @app.route('/training/<session_id>', methods=['GET'])
     @swag_from({
         'summary': 'Retrieve details of a specific training session by ID.',
         'parameters': [
@@ -103,7 +103,7 @@ def create_app(session_manager=None):
                         'schema': {
                             'type': 'object',
                             'properties': {
-                                'id': {'type': 'integer'},
+                                'id': {'type': 'string'},
                                 'start_time': {'type': 'number'},
                                 'end_time': {'type': 'number'},
                                 'config': {
@@ -159,8 +159,10 @@ def create_app(session_manager=None):
                             'id': {'type': 'string'},
                             'webhook_url': {'type': 'string'},
                             'civitai_key': {'type': 'string'},
-                            'checkpoint_url': {'type': 'string'},
-                            'checkpoint_filename': {'type': 'string'}
+                            'checkpoint_url': {'type': 'string', 'required': True},
+                            'checkpoint_filename': {'type': 'string', 'required': True},
+                            'training_images_url': {'type': 'string', 'required': True},
+                            'trigger_word': {'type': 'string', 'required': True},
                         }
                     }
                 }
@@ -193,13 +195,20 @@ def create_app(session_manager=None):
             'webhook_url',
             'civitai_key',
             'checkpoint_url',
-            'checkpoint_filename'
+            'checkpoint_filename',
+            'training_images_url',
+            'trigger_word',
         }
         
         # Validate incoming data
         invalid_keys = set(data.keys()) - permitted_keys
         if invalid_keys:
             return jsonify({"error": f"Invalid configuration provided: {', '.join(invalid_keys)}"}), 400
+
+        # Check for existing session with the same id
+        existing_session = session_manager.get_training_session(data['id'])
+        if existing_session:
+            return jsonify({"error": "A training session with this ID already exists"}), 400
 
         try:
             # Create a training session using the session manager
@@ -209,7 +218,7 @@ def create_app(session_manager=None):
         except Exception as e:
             return jsonify({"error": str(e)}), 400  # Return a 400 Bad Request with the error message
 
-    @app.route('/training/<int:session_id>/start', methods=['POST'])
+    @app.route('/training/<session_id>/start', methods=['POST'])
     @swag_from({
         'summary': 'Start the training for a specific training session by ID.',
         'parameters': [
@@ -257,7 +266,7 @@ def create_app(session_manager=None):
         except Exception as e:
             return jsonify({"error": str(e)}), 400  # Return a 400 Bad Request with the error message
 
-    @app.route('/training/<int:session_id>', methods=['DELETE'])
+    @app.route('/training/<session_id>', methods=['DELETE'])
     @swag_from({
         'summary': 'Abort a training session by ID.',
         'parameters': [
@@ -306,7 +315,7 @@ def create_app(session_manager=None):
         except Exception as e:
             return jsonify({"error": str(e)}), 400  # Return a 400 Bad Request with the error message
 
-    @app.route('/training/<int:session_id>/upload', methods=['POST'])
+    @app.route('/training/<session_id>/upload', methods=['POST'])
     @swag_from({
         'summary': 'Upload files for a specific training session by ID.',
         'requestBody': {

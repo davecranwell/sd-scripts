@@ -4,15 +4,18 @@ import os
 import subprocess
 import threading
 import json
-import random  # Ensure random is imported
-import pycurl  # Import pycurl for downloading files
-import shutil  # Import shutil for checking disk space
+import random  
+import pycurl
+import shutil
 import certifi
 import requests
-from utils import AbortableThread  # Import AbortableThread from utils
+from utils import AbortableThread
 
 WORKING_FOLDER_ROOT = 'runs'
 PRETRAINED_MODEL_PATH = 'pretrained'
+
+def _round_to_nearest(value, round_to):
+    return round(value / round_to) * round_to
 
 class TrainingSessionManager:
     def __init__(self, db_connection=None):
@@ -26,7 +29,6 @@ class TrainingSessionManager:
         self.training_process = None  # To keep track of the current training process
         self.current_session_id = None  # Track the current session ID
         self.lock = threading.Lock()  # Create a lock for managing training sessions
-        self.download_progress = 0  # Class variable to store download progress percentage
         self.training_thread = None
 
     def initialize_database(self):
@@ -35,7 +37,7 @@ class TrainingSessionManager:
         # Create the new training_sessions table with a random ID
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS training_sessions (
-            id INTEGER PRIMARY KEY,
+            id TEXT PRIMARY KEY,
             start_time REAL,
             remaining INTEGER,
             status TEXT,
@@ -43,7 +45,7 @@ class TrainingSessionManager:
             config TEXT,
             is_completed BOOLEAN,
             last_updated REAL,
-            last_error TEXT  -- New column for storing the last error message
+            last_error TEXT
         )
         ''')
 
@@ -80,7 +82,7 @@ class TrainingSessionManager:
         config['train_data_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['train_data_dir'])
         # Uncomment if you want to modify pretrained_model_name_or_path as well
         # config['pretrained_model_name_or_path'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['pretrained_model_name_or_path'])
-
+        
         # Create necessary directories
         for dir_path in [config['output_dir'], config['logging_dir'], config['train_data_dir'], config['pretrained_model_name_or_path']]:
             os.makedirs(dir_path, exist_ok=True)
@@ -154,16 +156,13 @@ class TrainingSessionManager:
        
         self.conn.commit()
 
-    def fire_webhook(self, session_id, data):
-        # TODO: Implement webhook firing
+    def fire_webhook(self, session_id):
         training_session = self.get_training_session(session_id)
         if training_session and 'webhook_url' in training_session['config']:
             webhook_url = training_session['config']['webhook_url']
             
-            # Call webhook with GET request
-            # convert training_session to json
-            training_session_json = json.dumps(training_session)
-            requests.post(webhook_url, json=training_session_json)
+            # Call webhook with POST request
+            requests.post(webhook_url, json=json.dumps(training_session))
 
     def record_epoch_loss(self, session_id, epoch, loss):
         cursor = self.conn.cursor()
@@ -184,7 +183,7 @@ class TrainingSessionManager:
         WHERE id = ?
         ''' 
     
-        cursor.execute(update_query, (time.time(), error_message is None, error_message, "complete", session_id))
+        cursor.execute(update_query, (time.time(), error_message is None, error_message, "training_completed" if error_message is None else "training_failed", session_id))
         self.conn.commit()
 
         # Fire webhook call
@@ -231,6 +230,16 @@ class TrainingSessionManager:
 
     def run_training(self, config, session_id) -> None:
         cmd = ["python", self.script_path, "--session_id", str(session_id)] # session_id is added so train_network doesn't create its own id
+        
+        # strip config items that are not related to kohya but came from the original config posted to the API. Kohya will throw errors otherwise.
+        config.pop("id", None)
+        config.pop("webhook_url", None)
+        config.pop("training_images_url", None)
+        config.pop("checkpoint_url", None)
+        config.pop("checkpoint_filename", None)
+        config.pop("civitai_key", None)
+        config.pop("trigger_word", None)
+
         for key, value in config.items():
             if isinstance(value, bool):
                 if value:
@@ -261,7 +270,7 @@ class TrainingSessionManager:
         if training_session['is_completed']:
             raise Exception(f"Cannot abort a completed training session.")
 
-        if self.training_process:
+        if self.training_process is not None:
             self.training_process.terminate()  # Terminate the subprocess if runnin
 
         if self.training_thread is not None and self.training_thread.is_alive():
@@ -288,10 +297,6 @@ class TrainingSessionManager:
             checkpoint_filename = config.get("checkpoint_filename")
             output_path = config.get("pretrained_model_name_or_path")
             
-            # Remove the civitai_key and checkpoint_url from the config as these are not known to the sd-scripts
-            config.pop("civitai_key", None)
-            config.pop("checkpoint_url", None)
-
             downloaded_images = self.download_images(session_id)
             
             downloaded_checkpoint = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename)
@@ -310,8 +315,8 @@ class TrainingSessionManager:
             raise Exception("Training session not found or config is missing")
 
         config = training_session['config']
-        images_url = config.get('images_url')
-        if not images_url:
+        training_images_url = config.get('training_images_url')
+        if not training_images_url:
             raise Exception("No images URL provided in config")
 
         train_data_dir = config.get('train_data_dir')
@@ -322,14 +327,19 @@ class TrainingSessionManager:
         zip_path = os.path.join(train_data_dir, 'images.zip')
         
         self._download_file(
-            url=images_url,
+            url=training_images_url,
             output_path=zip_path,
             session_id=session_id,
             status_prefix="downloading_images"
         )
         
         # Unzip the downloaded file
-        shutil.unpack_archive(zip_path, train_data_dir)
+        # create the output directory from the training_session epoch number, and the trigger word
+        epoch_number = training_session['config'].get('epoch', 0)
+        trigger_word = training_session['config'].get('trigger_word', 'oxhw')
+        output_dir = os.path.join(train_data_dir, f"{epoch_number}_{trigger_word}")
+        os.makedirs(output_dir, exist_ok=True)
+        shutil.unpack_archive(zip_path, output_dir)
         os.remove(zip_path)  # Clean up zip file after extraction
         
         return True
@@ -350,12 +360,10 @@ class TrainingSessionManager:
         """
         if session_id:
             self.update_training_session(session_id, status=f"{status_prefix}_started")
-            self.fire_webhook(session_id)
 
         # Create output directory if it doesn't exist
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        # Initialize curl
         curl = pycurl.Curl()
         curl.setopt(curl.URL, url)
         if headers:
@@ -366,11 +374,19 @@ class TrainingSessionManager:
         curl.setopt(pycurl.USERAGENT, b"Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 
         with open(output_path, 'wb') as file:
-            self.download_progress = 0
+            # Create a container for the progress value that can be accessed from the nested function
+            progress_state = {'last_reported': 0}
 
             def progress_callback(total_to_download, downloaded, total_to_upload, uploaded):
                 if total_to_download > 0:
-                    self.download_progress = (downloaded / total_to_download) * 100
+                    # only update the training session for every 5% progress
+                    progress = (downloaded / total_to_download) * 100
+                    rounded_progress = _round_to_nearest(progress, 10)
+
+                    if rounded_progress != progress_state['last_reported']:
+                        progress_state['last_reported'] = rounded_progress
+                        self.update_training_session(session_id, status=f"{status_prefix}_progress", remaining=rounded_progress)
+
                 return 1 if self.training_thread._stop_event.is_set() else 0
 
             curl.setopt(curl.WRITEDATA, file)
@@ -391,18 +407,15 @@ class TrainingSessionManager:
                     raise Exception(f"Not enough disk space. Required: {total_size}, Available: {free}")
 
                 print(f"Downloaded {total_size} bytes to {output_path}")
-                self.download_progress = 100
 
                 if session_id:
                     self.update_training_session(session_id, status=f"{status_prefix}_completed")
-                    self.fire_webhook(session_id)
                     
                 return True
             except Exception as e:
                 print(f"Error during download: {e}")
                 if session_id:
                     self.update_training_session(session_id, status=f"{status_prefix}_failed")
-                    self.fire_webhook(session_id)
                 raise
             finally:
                 curl.close()
@@ -469,7 +482,4 @@ class TrainingSessionManager:
         # Calculate training progress
         training_progress = (highest_epoch / total_epochs) * 100 if total_epochs > 0 else 0
 
-        # Combine download progress and training progress
-        overall_progress = (self.download_progress + training_progress) / 2  # Average of both progress
-
-        return overall_progress
+        return training_progress
