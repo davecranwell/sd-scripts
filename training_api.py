@@ -78,7 +78,8 @@ def create_app(session_manager=None):
     def get_trainings():
         trainings = session_manager.get_all_training_sessions()
         for training in trainings:
-            training['epoch_losses'] = session_manager.get_epoch_losses(training['id'])  # Fetch epoch losses
+            losses = session_manager.get_epoch_losses(training['id'])
+            training['epoch_losses'] = [{"epoch": loss[0], "loss": loss[1]} for loss in losses]
         return jsonify([dict(training) for training in trainings])
 
     @app.route('/training/<session_id>', methods=['GET'])
@@ -141,8 +142,10 @@ def create_app(session_manager=None):
         progress = session_manager.get_total_progress(session_id)
         if training is None:
             return jsonify({"error": "Training session not found"}), 404
+        
+        losses = session_manager.get_epoch_losses(session_id)
+        training['epoch_losses'] = [{"epoch": loss[0], "loss": loss[1]} for loss in losses]
 
-        training['epoch_losses'] = session_manager.get_epoch_losses(session_id)  # Fetch epoch losses
         training['progress'] = progress
         return jsonify(dict(training))
 
@@ -156,6 +159,7 @@ def create_app(session_manager=None):
                     'schema': {
                         'type': 'object',
                         'properties': {
+                            # This must be synced with: webapp/app/util/training-config.jsonc and training_session_manager.py where certain config values are removed before training
                             'id': {'type': 'string'},
                             'webhook_url': {'type': 'string'},
                             'civitai_key': {'type': 'string'},
@@ -163,7 +167,9 @@ def create_app(session_manager=None):
                             'checkpoint_filename': {'type': 'string', 'required': True},
                             'training_images_url': {'type': 'string', 'required': True},
                             'trigger_word': {'type': 'string', 'required': True},
-                        }
+                            'upload_url': {'type': 'string', 'required': True},
+                        },
+                        'additionalProperties': True
                     }
                 }
             }

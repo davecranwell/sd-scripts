@@ -79,7 +79,7 @@
     "num_processes": 1,
     "optimizer_type": "Adafactor",
     "optimizer_args": "scale_parameter=False relative_step=False warmup_init=False",
-    "output_name": "nat0",
+    "output_name": "ohxw",
     "persistent_data_loader_workers": false,
     "prior_loss_weight": 1,
     "random_crop": false,
