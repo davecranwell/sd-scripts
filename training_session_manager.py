@@ -80,11 +80,14 @@ class TrainingSessionManager:
         config['output_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['output_dir'])
         config['logging_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['logging_dir'])
         config['train_data_dir'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['train_data_dir'])
-        # Uncomment if you want to modify pretrained_model_name_or_path as well
-        # config['pretrained_model_name_or_path'] = os.path.join(WORKING_FOLDER_ROOT, str(session_id), config['pretrained_model_name_or_path'])
         
         # Create necessary directories
-        for dir_path in [config['output_dir'], config['logging_dir'], config['train_data_dir'], config['pretrained_model_name_or_path']]:
+        for dir_path in [
+            config['output_dir'], 
+            config['logging_dir'], 
+            config['train_data_dir'], 
+            os.path.join(WORKING_FOLDER_ROOT, PRETRAINED_MODEL_PATH)
+        ]:
             os.makedirs(dir_path, exist_ok=True)
         
         # Ensure the generated ID is unique
@@ -185,9 +188,24 @@ class TrainingSessionManager:
     
         cursor.execute(update_query, (time.time(), error_message is None, error_message, "training_completed" if error_message is None else "training_failed", session_id))
         self.conn.commit()
-
-        # Fire webhook call
         self.fire_webhook(session_id)
+
+        if not error_message:
+            # Upload the checkpoint with the lowest loss to the S3 bucket
+            self.upload_winning_checkpoint(session_id)
+
+    def upload_winning_checkpoint(self, session_id):
+        training_session = self.get_training_session(session_id)
+        if not training_session:
+            raise Exception("Training session not found")
+
+        # get the epoch with the lowest loss
+        epoch_losses = self.get_epoch_losses(session_id, order_by_loss=True)
+        lowest_loss_epoch = epoch_losses[0]
+
+        config = training_session['config']
+        checkpoint_path = os.path.join(config['output_dir'], 'models', f"{config['output_name']}-{str(lowest_loss_epoch['epoch']).zfill(6)}.safetensors")
+        self._upload_file(checkpoint_path, config['upload_url'], session_id)
 
     def get_all_training_sessions(self) -> list[dict]:
         cursor = self.conn.cursor()
@@ -239,6 +257,7 @@ class TrainingSessionManager:
         config.pop("checkpoint_filename", None)
         config.pop("civitai_key", None)
         config.pop("trigger_word", None)
+        config.pop("upload_url", None)
 
         for key, value in config.items():
             if isinstance(value, bool):
@@ -278,13 +297,16 @@ class TrainingSessionManager:
         
         self.complete_training_session(session_id, "Training aborted")  # Mark the session as completed
 
-    def get_epoch_losses(self, session_id) -> list[dict]:
+    def get_epoch_losses(self, session_id, order_by_loss=False) -> list[dict]:
         cursor = self.conn.cursor()
-        cursor.execute('SELECT epoch, loss FROM epoch_losses WHERE session_id = ?', (session_id,))
-        losses = cursor.fetchall()
-        # return [self._process_row(row) for row in losses]
-        # Convert the list of tuples to a list of dictionaries
-        return [{"epoch": loss[0], "loss": loss[1]} for loss in losses]
+
+        select_query ='''
+        SELECT epoch, loss FROM epoch_losses WHERE session_id = ? ORDER BY ? ASC
+        '''
+        
+        cursor.execute(select_query, (session_id, 'loss' if order_by_loss else 'epoch'))
+        
+        return cursor.fetchall()
 
     def __del__(self):
         if hasattr(self, 'conn'):
@@ -302,6 +324,7 @@ class TrainingSessionManager:
             downloaded_checkpoint = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename)
            
             if downloaded_images and downloaded_checkpoint:
+                config['pretrained_model_name_or_path'] = os.path.join(WORKING_FOLDER_ROOT, PRETRAINED_MODEL_PATH, checkpoint_filename)
                 self.run_training(config, session_id)
         except Exception as e:
             error_message = str(e)  # Capture the error message
@@ -420,6 +443,78 @@ class TrainingSessionManager:
             finally:
                 curl.close()
 
+    def _upload_file(self, file_path, url, session_id, status_prefix="uploading"):
+        """
+        Upload a file to S3 using pycurl with settings optimized for large files and WSL2
+        
+        Args:
+            file_path (str): Path to the file to upload
+            url (str): Presigned S3 URL
+            session_id (str): Training session ID
+            status_prefix (str): Prefix for status updates
+        """
+        try:
+            self.update_training_session(session_id, status=f"{status_prefix}_started")
+            
+            # Get file size for progress tracking
+            filesize = os.path.getsize(file_path)
+            
+            curl = pycurl.Curl()
+            curl.setopt(curl.URL, url)
+            
+            # Set similar options to the working curl command
+            curl.setopt(curl.UPLOAD, 1)  # Enable upload mode
+            curl.setopt(curl.CAINFO, certifi.where())
+            curl.setopt(curl.INFILESIZE, filesize)
+            curl.setopt(curl.HTTPHEADER, [
+                'Content-Type: application/octet-stream',
+                f'Content-Length: {filesize}',
+                'Expect:'  # Disable Expect header which can cause issues with S3
+            ])
+            
+            # Open the file for reading
+            with open(file_path, 'rb') as file:
+                curl.setopt(curl.READDATA, file)
+                
+                # Create a container for the progress value that can be accessed from the nested function
+                progress_state = {'last_reported': 0}
+                
+                def progress_callback(total_to_download, downloaded, total_to_upload, uploaded):
+                    if total_to_upload > 0:
+                        # Only update the training session for every 5% progress
+                        progress = (uploaded / total_to_upload) * 100
+                        rounded_progress = _round_to_nearest(progress, 5)
+                        
+                        if rounded_progress != progress_state['last_reported']:
+                            progress_state['last_reported'] = rounded_progress
+                            self.update_training_session(
+                                session_id, 
+                                status=f"{status_prefix}_progress", 
+                                remaining=rounded_progress
+                            )
+                    return 0  # Return 0 to continue transfer
+                
+                # Set progress monitoring
+                curl.setopt(curl.NOPROGRESS, False)
+                curl.setopt(curl.XFERINFOFUNCTION, progress_callback)
+                
+                # Perform the upload
+                curl.perform()
+                
+                # Check response code
+                response_code = curl.getinfo(curl.RESPONSE_CODE)
+                if response_code != 200:
+                    raise Exception(f"Upload failed with status code: {response_code}")
+                
+                self.update_training_session(session_id, status=f"{status_prefix}_completed")
+                
+        except Exception as e:
+            print(f"Error during upload: {e}")
+            self.update_training_session(session_id, status=f"{status_prefix}_failed")
+            raise
+        finally:
+            curl.close()
+
     def download_checkpoint(self, civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename):
         headers = []
         
@@ -436,7 +531,6 @@ class TrainingSessionManager:
             session_id=session_id,
             status_prefix="downloading_checkpoint"
         )
-
 
     def start_training(self, session_id) -> int:
         # Get the training config
