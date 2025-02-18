@@ -250,14 +250,8 @@ class TrainingSessionManager:
         cmd = ["python", self.script_path, "--session_id", str(session_id)] # session_id is added so train_network doesn't create its own id
         
         # strip config items that are not related to kohya but came from the original config posted to the API. Kohya will throw errors otherwise.
-        config.pop("id", None)
-        config.pop("webhook_url", None)
-        config.pop("training_images_url", None)
-        config.pop("checkpoint_url", None)
-        config.pop("checkpoint_filename", None)
-        config.pop("civitai_key", None)
-        config.pop("trigger_word", None)
-        config.pop("upload_url", None)
+        for key in ["id", "webhook_url", "training_images_url", "checkpoint_url", "checkpoint_filename", "civitai_key", "trigger_word", "upload_url", "image_repeats"]:
+            config.pop(key, None)
 
         for key, value in config.items():
             if isinstance(value, bool):
@@ -358,9 +352,9 @@ class TrainingSessionManager:
         
         # Unzip the downloaded file
         # create the output directory from the training_session epoch number, and the trigger word
-        epoch_number = training_session['config'].get('epoch', 0)
+        repeats = training_session['config'].get('image_repeats', 4)
         trigger_word = training_session['config'].get('trigger_word', 'oxhw')
-        output_dir = os.path.join(train_data_dir, f"{epoch_number}_{trigger_word}")
+        output_dir = os.path.join(train_data_dir, f"{repeats}_{trigger_word}")
         os.makedirs(output_dir, exist_ok=True)
         shutil.unpack_archive(zip_path, output_dir)
         os.remove(zip_path)  # Clean up zip file after extraction
