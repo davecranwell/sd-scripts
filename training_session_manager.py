@@ -351,8 +351,7 @@ class TrainingSessionManager:
         )
         
         # Unzip the downloaded file
-        # create the output directory from the training_session epoch number, and the trigger word
-        repeats = training_session['config'].get('image_repeats', 4)
+        repeats = training_session['config'].get('image_repeats', 1)
         trigger_word = training_session['config'].get('trigger_word', 'oxhw')
         output_dir = os.path.join(train_data_dir, f"{repeats}_{trigger_word}")
         os.makedirs(output_dir, exist_ok=True)
@@ -514,7 +513,7 @@ class TrainingSessionManager:
         
         if "civitai.com" in checkpoint_url.lower():
             headers.append(f'Authorization: Bearer {civitai_key}')
-            checkpoint_url = checkpoint_url + "&token=" + civitai_key
+            checkpoint_url += "&token=" + civitai_key if "?" in checkpoint_url else "?token=" + civitai_key
 
         file_path = os.path.join(output_path, checkpoint_filename)
        
