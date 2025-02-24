@@ -1,3 +1,4 @@
+numpy==1.26.2
 accelerate==0.25.0
 transformers==4.36.2
 diffusers[torch]==0.25.0
