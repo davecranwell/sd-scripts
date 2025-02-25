@@ -518,6 +518,11 @@ class TrainingSessionManager:
 
     def download_checkpoint(self, civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename):
         headers = []
+
+        # Check if a file of the same name already exists in the output path
+        if os.path.exists(os.path.join(output_path, checkpoint_filename)):
+            print(f"File {checkpoint_filename} already exists in {output_path}")
+            return True
         
         if "civitai.com" in checkpoint_url.lower():
             headers.append(f'Authorization: Bearer {civitai_key}')
