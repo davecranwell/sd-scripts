@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import torch
 from library.device_utils import init_ipex, clean_memory_on_device
@@ -175,11 +176,17 @@ def setup_parser() -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
-    parser = setup_parser()
+    try:
+        parser = setup_parser()
+        print("Raw sys.argv:", sys.argv)
 
-    args = parser.parse_args()
-    train_util.verify_command_line_training_args(args)
-    args = train_util.read_config_from_file(args, parser)
+        args = parser.parse_args()
+        train_util.verify_command_line_training_args(args)
+        args = train_util.read_config_from_file(args, parser)
 
-    trainer = SdxlNetworkTrainer()
-    trainer.train(args)
+        trainer = SdxlNetworkTrainer()
+        trainer.train(args)
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error occurred during training: {e}")
+        sys.exit(1)

@@ -212,10 +212,9 @@ class NetworkTrainer:
             train_util.debug_dataset(train_dataset_group)
             return
         if len(train_dataset_group) == 0:
-            logger.error(
-                "No data found. Please verify arguments (train_data_dir must be the parent of folders with images) / 画像がありません。引数指定を確認してください（train_data_dirには画像があるフォルダではなく、画像があるフォルダの親フォルダを指定する必要があります）"
-            )
-            return
+            error = "No data found. Please verify arguments (train_data_dir must be the parent of folders with images) / 画像がありません。引数指定を確認してください（train_data_dirには画像があるフォルダではなく、画像があるフォルダの親フォルダを指定する必要があります）"
+            logger.error(error) 
+            raise RuntimeError(error)
 
         if cache_latents:
             assert (
@@ -1141,6 +1140,10 @@ def setup_parser() -> argparse.ArgumentParser:
     custom_train_functions.add_custom_train_arguments(parser)
 
     parser.add_argument(
+        "--session_id", type=str, help="An ID to track the training session"
+    )
+
+    parser.add_argument(
         "--no_metadata", action="store_true", help="do not save metadata in output model / メタデータを出力先モデルに保存しない"
     )
     parser.add_argument(
@@ -1255,11 +1258,16 @@ def setup_parser() -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
-    parser = setup_parser()
+    try:
+        parser = setup_parser()
 
-    args = parser.parse_args()
-    train_util.verify_command_line_training_args(args)
-    args = train_util.read_config_from_file(args, parser)
+        args = parser.parse_args()
+        train_util.verify_command_line_training_args(args)
+        args = train_util.read_config_from_file(args, parser)
 
-    trainer = NetworkTrainer()
-    trainer.train(args)
+        trainer = NetworkTrainer()
+        trainer.train(args)
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error occurred during training: {e}")
+        sys.exit(1)
