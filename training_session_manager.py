@@ -198,6 +198,8 @@ class TrainingSessionManager:
             self.upload_winning_checkpoint(session_id)
         
         self.current_session_id = None
+        self.training_process = None
+        self.training_thread = None
 
     def upload_winning_checkpoint(self, session_id):
         training_session = self.get_training_session(session_id)
