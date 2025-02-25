@@ -198,7 +198,7 @@ def create_app(session_manager=None):
         # Define permitted keys
         permitted_keys = {
             'network_dim', 'lr_scheduler', 'metadata_author', 'bucket_reso_steps', 'max_bucket_reso', 'sample_every_n_epochs', 'metadata_title',
-            'flip_aug', 'sample_prompts', 'max_resolution', 'output_name', 'upload_url', 'full_bf16', 'network_module', 'metadata_license', 'optimizer_type', 'fp8_base', 'optimizer_args', 'LoRA_type', 'unet_lr', 'sdxl_cache_text_encoder_outputs', 'metadata_description', 'train_batch_size', 'min_bucket_reso', 'sample_every_n_steps', 'keep_tokens', 'seed', 'metadata_tags', 'sdxl', 'epoch', 'text_encoder_lr', 'clip_skip', 'network_alpha', 'full_fp16', 'trigger_word', 'sample_sampler', 'training_images_url',
+            'flip_aug', 'sample_prompts', 'resolution', 'output_name', 'upload_url', 'full_bf16', 'network_module', 'metadata_license', 'optimizer_type', 'fp8_base', 'optimizer_args', 'unet_lr', 'sdxl_cache_text_encoder_outputs', 'metadata_description', 'train_batch_size', 'min_bucket_reso', 'sample_every_n_steps', 'keep_tokens', 'seed', 'metadata_tags', 'max_train_epochs', 'text_encoder_lr', 'clip_skip', 'network_alpha', 'full_fp16', 'trigger_word', 'sample_sampler', 'training_images_url',
             'image_repeats',
             'id',
             'webhook_url',
