@@ -66,7 +66,7 @@ class TrainingSessionManager:
         cursor = self.conn.cursor()
         
         # Load preset values from the external JSON file
-        preset_config_path = os.path.join(os.path.dirname(__file__), 'preset_config.json')
+        preset_config_path = os.path.join(os.path.dirname(__file__), 'sdxl_preset_config.json')
         with open(preset_config_path, 'r') as f:
             preset_config = json.load(f)
 
@@ -165,7 +165,10 @@ class TrainingSessionManager:
             webhook_url = training_session['config']['webhook_url']
             
             # Call webhook with POST request
-            requests.post(webhook_url, json=json.dumps(training_session))
+            try:
+                requests.post(webhook_url, json=json.dumps(training_session))
+            except Exception as e:
+                print(f"Error during webhook call: {e}")
 
     def record_epoch_loss(self, session_id, epoch, loss):
         cursor = self.conn.cursor()
@@ -193,6 +196,8 @@ class TrainingSessionManager:
         if not error_message:
             # Upload the checkpoint with the lowest loss to the S3 bucket
             self.upload_winning_checkpoint(session_id)
+        
+        self.current_session_id = None
 
     def upload_winning_checkpoint(self, session_id):
         training_session = self.get_training_session(session_id)
@@ -247,8 +252,8 @@ class TrainingSessionManager:
         return processed
 
     def run_training(self, config, session_id) -> None:
-        cmd = ["python", self.script_path, "--session_id", str(session_id)] # session_id is added so train_network doesn't create its own id
-        
+        # cmd = ["python", self.script_path] # session_id is added so train_network doesn't create its own id
+        cmd = ["python", self.script_path, "--session_id", str(session_id)]
         # strip config items that are not related to kohya but came from the original config posted to the API. Kohya will throw errors otherwise.
         for key in ["id", "webhook_url", "training_images_url", "checkpoint_url", "checkpoint_filename", "civitai_key", "trigger_word", "upload_url", "image_repeats"]:
             config.pop(key, None)
@@ -261,6 +266,8 @@ class TrainingSessionManager:
                 cmd.extend([f"--{key}", str(value)])
             elif isinstance(value, list):
                 cmd.extend([f"--{key}"] + [str(v) for v in value])
+
+        print(f"Running command: {' '.join(cmd)}")  # Debug print
 
         self.training_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = self.training_process.communicate()
@@ -285,6 +292,7 @@ class TrainingSessionManager:
 
         if self.training_process is not None:
             self.training_process.terminate()  # Terminate the subprocess if runnin
+            self.training_process = None
 
         if self.training_thread is not None and self.training_thread.is_alive():
             self.training_thread.stop()  # Stop the training thread
@@ -314,9 +322,9 @@ class TrainingSessionManager:
             output_path = config.get("pretrained_model_name_or_path")
             
             downloaded_images = self.download_images(session_id)
-            
+
             downloaded_checkpoint = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename)
-           
+
             if downloaded_images and downloaded_checkpoint:
                 config['pretrained_model_name_or_path'] = os.path.join(WORKING_FOLDER_ROOT, PRETRAINED_MODEL_PATH, checkpoint_filename)
                 self.run_training(config, session_id)
