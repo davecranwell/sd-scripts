@@ -188,5 +188,6 @@ if __name__ == "__main__":
         trainer.train(args)
         sys.exit(0)
     except Exception as e:
-        print(f"Error occurred during training: {e}")
+        print(f"Error occurred during training: {e}", file=sys.stderr)
+        logger.error(f"Error occurred during training: {e}")
         sys.exit(1)
