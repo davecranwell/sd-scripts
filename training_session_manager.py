@@ -293,7 +293,7 @@ class TrainingSessionManager:
             raise Exception(f"Cannot abort a completed training session.")
 
         if self.training_process is not None:
-            self.training_process.terminate()  # Terminate the subprocess if runnin
+            self.training_process.terminate()  # Terminate the subprocess if running
             self.training_process = None
 
         if self.training_thread is not None and self.training_thread.is_alive():
