@@ -8,6 +8,7 @@ import time
 import json
 from multiprocessing import Value
 import toml
+import datetime
 
 from tqdm import tqdm
 
@@ -835,8 +836,7 @@ class NetworkTrainer:
             epoch=0,
             step=0,
             loss=0.0,
-            max_train_epochs=num_train_epochs,
-            remaining=progress_bar.format_dict['remaining']
+            max_train_epochs=num_train_epochs
         ) 
 
         noise_scheduler = DDPMScheduler(
@@ -1101,8 +1101,8 @@ class NetworkTrainer:
                 session_id=session_id, 
                 epoch=epoch + 1, 
                 step=global_step, 
-                loss=loss.detach().item(), 
-                remaining=progress_bar.format_dict['remaining']
+                loss=loss.detach().item(),
+                remaining=progress_bar.format_dict['total'] - progress_bar.format_dict['n']
             )
             self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
             # end of epoch

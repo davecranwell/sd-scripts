@@ -10,6 +10,7 @@ import shutil
 import certifi
 import requests
 from utils import AbortableThread
+import toml
 
 WORKING_FOLDER_ROOT = 'runs'
 PRETRAINED_MODEL_PATH = 'pretrained'
@@ -208,10 +209,10 @@ class TrainingSessionManager:
 
         # get the epoch with the lowest loss
         epoch_losses = self.get_epoch_losses(session_id, order_by_loss=True)
-        lowest_loss_epoch = epoch_losses[0]
+        epoch, loss = epoch_losses[0]
 
         config = training_session['config']
-        checkpoint_path = os.path.join(config['output_dir'], 'models', f"{config['output_name']}-{str(lowest_loss_epoch['epoch']).zfill(6)}.safetensors")
+        checkpoint_path = os.path.join(config['output_dir'], f"{config['output_name']}-{str(epoch).zfill(6)}.safetensors")
         self._upload_file(checkpoint_path, config['upload_url'], session_id)
 
     def get_all_training_sessions(self) -> list[dict]:
@@ -254,20 +255,23 @@ class TrainingSessionManager:
         return processed
 
     def run_training(self, config, session_id) -> None:
-        # cmd = ["python", self.script_path] # session_id is added so train_network doesn't create its own id
-        cmd = ["python", self.script_path, "--session_id", str(session_id)]
-        # strip config items that are not related to kohya but came from the original config posted to the API. Kohya will throw errors otherwise.
+        cmd = ["python", self.script_path]
+        
+        config['session_id'] = str(session_id)
+
+        # strip config items that are not related to kohya but came from the original config posted to the API
         for key in ["id", "webhook_url", "training_images_url", "checkpoint_url", "checkpoint_filename", "civitai_key", "trigger_word", "upload_url", "image_repeats"]:
             config.pop(key, None)
 
-        for key, value in config.items():
-            if isinstance(value, bool):
-                if value:
-                    cmd.append(f"--{key}")
-            elif isinstance(value, (int, float, str)):
-                cmd.extend([f"--{key}", str(value)])
-            elif isinstance(value, list):
-                cmd.extend([f"--{key}"] + [str(v) for v in value])
+        # Save config as TOML file in the session's directory
+        config_path = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'config.toml')
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        
+        with open(config_path, 'w') as f:
+            toml.dump(config, f)
+
+        # Add the config file path to the command
+        cmd.extend(["--config_file", config_path])
 
         print(f"Running command: {' '.join(cmd)}")  # Debug print
 
@@ -305,7 +309,7 @@ class TrainingSessionManager:
         cursor = self.conn.cursor()
 
         select_query ='''
-        SELECT epoch, loss FROM epoch_losses WHERE session_id = ? ORDER BY ? ASC
+        SELECT epoch, loss FROM epoch_losses WHERE session_id = ? AND epoch > 0 ORDER BY ? ASC
         '''
         
         cursor.execute(select_query, (session_id, 'loss' if order_by_loss else 'epoch'))
@@ -456,24 +460,25 @@ class TrainingSessionManager:
             session_id (str): Training session ID
             status_prefix (str): Prefix for status updates
         """
+
+        curl = pycurl.Curl()
+        curl.setopt(curl.URL, url)
+            
+        # Set similar options to the working curl command
+        curl.setopt(curl.UPLOAD, 1)  # Enable upload mode
+        curl.setopt(curl.CAINFO, certifi.where())
+        curl.setopt(curl.INFILESIZE, filesize)
+        curl.setopt(curl.HTTPHEADER, [
+            'Content-Type: application/octet-stream',
+            f'Content-Length: {filesize}',
+            'Expect:'  # Disable Expect header which can cause issues with S3
+        ])
+
         try:
             self.update_training_session(session_id, status=f"{status_prefix}_started")
             
             # Get file size for progress tracking
             filesize = os.path.getsize(file_path)
-            
-            curl = pycurl.Curl()
-            curl.setopt(curl.URL, url)
-            
-            # Set similar options to the working curl command
-            curl.setopt(curl.UPLOAD, 1)  # Enable upload mode
-            curl.setopt(curl.CAINFO, certifi.where())
-            curl.setopt(curl.INFILESIZE, filesize)
-            curl.setopt(curl.HTTPHEADER, [
-                'Content-Type: application/octet-stream',
-                f'Content-Length: {filesize}',
-                'Expect:'  # Disable Expect header which can cause issues with S3
-            ])
             
             # Open the file for reading
             with open(file_path, 'rb') as file:

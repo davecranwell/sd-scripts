@@ -92,7 +92,7 @@ def create_app(session_manager=None):
                 'required': True,
                 'description': 'The ID of the training session',
                 'schema': {
-                    'type': 'integer'
+                    'type': 'string'
                 }
             }
         ],
@@ -183,7 +183,7 @@ def create_app(session_manager=None):
                             'type': 'object',
                             'properties': {
                                 'message': {'type': 'string'},
-                                'session_id': {'type': 'integer'},
+                                'session_id': {'type': 'string'},
                                 'config': {'type': 'object'}
                             }
                         }
@@ -237,7 +237,7 @@ def create_app(session_manager=None):
                 'required': True,
                 'description': 'The ID of the training session to start',
                 'schema': {
-                    'type': 'integer'
+                    'type': 'string'
                 }
             }
         ],
@@ -250,7 +250,7 @@ def create_app(session_manager=None):
                             'type': 'object',
                             'properties': {
                                 'message': {'type': 'string'},
-                                'session_id': {'type': 'integer'},
+                                'session_id': {'type': 'string'},
                                 'config': {'type': 'object'}
                             }
                         }
@@ -285,7 +285,7 @@ def create_app(session_manager=None):
                 'required': True,
                 'description': 'The ID of the training session to abort',
                 'schema': {
-                    'type': 'integer'
+                    'type': 'string'
                 }
             }
         ],
@@ -298,7 +298,7 @@ def create_app(session_manager=None):
                             'type': 'object',
                             'properties': {
                                 'message': {'type': 'string'},
-                                'session_id': {'type': 'integer'}
+                                'session_id': {'type': 'string'}
                             }
                         }
                     }
@@ -353,7 +353,7 @@ def create_app(session_manager=None):
                 'required': True,
                 'description': 'The ID of the training session to upload files for',
                 'schema': {
-                    'type': 'integer'
+                    'type': 'string'
                 }
             },
         ],
