@@ -164,7 +164,9 @@ class TrainingSessionManager:
         training_session = self.get_training_session(session_id)
         if training_session and 'webhook_url' in training_session['config']:
             webhook_url = training_session['config']['webhook_url']
-            
+            training_session['epoch_losses'] = self.get_epoch_losses(session_id)
+            training_session.pop('config', None)
+
             # Call webhook with POST request
             try:
                 requests.post(webhook_url, json=json.dumps(training_session))
