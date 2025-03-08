@@ -81,6 +81,7 @@
     "text_encoder_lr": 0.0004,
     "train_batch_size": 2,
     "train_norm": false,
+    "network_train_unet_only": true,
     "unet_lr": 0.0004,
     "use_cp": false,
     "use_scalar": false,
