@@ -23,8 +23,28 @@ class TrainingSessionManager:
         if db_connection:
             self.conn = db_connection
         else:
-            db_path = os.path.join(os.path.dirname(__file__), 'training_history.db')
-            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            try:
+                # Use the workspace directory which should be writable
+                workspace_dir = '/workspace'
+                data_dir = os.path.join(workspace_dir, 'data')
+                os.makedirs(data_dir, exist_ok=True)
+                print(f"Data directory created/verified at: {data_dir}")
+                
+                db_path = os.path.join(data_dir, 'training_history.db')
+                print(f"Attempting to connect to database at: {db_path}")
+                print(f"Current working directory: {os.getcwd()}")
+                print(f"Directory exists: {os.path.exists(data_dir)}")
+                print(f"Directory writable: {os.access(data_dir, os.W_OK)}")
+                
+                # SQLite needs check_same_thread=False for multi-threaded web servers
+                self.conn = sqlite3.connect(db_path, check_same_thread=False)
+                print("Successfully connected to database")
+                
+            except Exception as e:
+                print(f"Error initializing database: {str(e)}")
+                print(f"Current process user: {os.getuid()}:{os.getgid()}")
+                raise  # Re-raise the exception after logging
+            
         self.script_path = os.path.join(os.path.dirname(__file__), 'sdxl_train_network.py')
         self.initialize_database()
         self.training_process = None  # To keep track of the current training process
