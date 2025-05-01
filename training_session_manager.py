@@ -485,23 +485,24 @@ class TrainingSessionManager:
 
         curl = pycurl.Curl()
         curl.setopt(curl.URL, url)
-            
+
         # Set similar options to the working curl command
         curl.setopt(curl.UPLOAD, 1)  # Enable upload mode
         curl.setopt(curl.CAINFO, certifi.where())
-        curl.setopt(curl.INFILESIZE, filesize)
-        curl.setopt(curl.HTTPHEADER, [
-            'Content-Type: application/octet-stream',
-            f'Content-Length: {filesize}',
-            'Expect:'  # Disable Expect header which can cause issues with S3
-        ])
-
+       
         try:
             self.update_training_session(session_id, status=f"{status_prefix}_started")
             
             # Get file size for progress tracking
             filesize = os.path.getsize(file_path)
             
+            curl.setopt(curl.INFILESIZE, filesize)
+            curl.setopt(curl.HTTPHEADER, [
+                'Content-Type: application/octet-stream',
+                f'Content-Length: {filesize}',
+                'Expect:'  # Disable Expect header which can cause issues with S3
+            ])
+
             # Open the file for reading
             with open(file_path, 'rb') as file:
                 curl.setopt(curl.READDATA, file)
