@@ -180,7 +180,6 @@ class TrainingSessionManager:
         if 'epoch' in kwargs and 'loss' in kwargs:
             self.record_epoch_loss(session_id, kwargs['epoch'], kwargs['loss'])
 
-        # Fire webhook call with an object that is passed directly to the webhook post body
         self.fire_webhook(session_id)
 
         # If new_config is provided, update the config field
@@ -205,6 +204,7 @@ class TrainingSessionManager:
         if training_session and 'webhook_url' in training_session['config']:
             webhook_url = training_session['config']['webhook_url']
             training_session['epoch_losses'] = self.get_epoch_losses(session_id)
+            # exclude config from the webhook call coz it's typically so big
             training_session.pop('config', None)
 
             # Call webhook with POST request
