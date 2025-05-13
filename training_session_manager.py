@@ -157,6 +157,15 @@ class TrainingSessionManager:
             update_fields.append('remaining = ?')
             params.append(kwargs['remaining'])
 
+        if 'is_completed' in kwargs:
+            update_fields.append('is_completed = ?, end_time = ?')
+            params.append(kwargs['is_completed'])
+            params.append(time.time())
+
+        if 'last_error' in kwargs:
+            update_fields.append('last_error = ?')
+            params.append(kwargs['last_error'])
+
         update_query = f'''
         UPDATE training_sessions
         SET {', '.join(update_fields)}
@@ -219,7 +228,11 @@ class TrainingSessionManager:
     def complete_training_session(self, session_id, error_message=None):
         """Completes a training session by uploading the checkpoint with the lowest loss value to the S3 bucket."""
 
-        self.update_training_session(session_id, status="training_completed" if error_message is None else "training_failed")
+        self.update_training_session(
+            session_id, 
+            status="training_completed" if error_message is None else "training_failed",
+            last_error=error_message if error_message else None
+        )
 
         if not error_message:
             # Upload the checkpoint with the lowest loss to the S3 bucket
@@ -230,14 +243,7 @@ class TrainingSessionManager:
         self.training_thread = None
 
         if not error_message:
-            update_query = '''
-            UPDATE training_sessions
-            SET end_time = ?, is_completed = ?, status = ?
-            WHERE id = ?
-            '''
-            cursor = self.conn.cursor()
-            cursor.execute(update_query, (time.time(), True, "completed", session_id))
-            self.conn.commit()
+            self.update_training_session(session_id, status="completed", is_completed=True)
 
     def upload_winning_checkpoint(self, session_id):
         """Uploads the checkpoint with the lowest loss value to the configured upload URL."""
