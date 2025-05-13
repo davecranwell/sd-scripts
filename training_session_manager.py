@@ -4,9 +4,10 @@ import os
 import subprocess
 import threading
 import json
-import random  
-import pycurl
+import random
 import shutil
+
+import pycurl
 import certifi
 import requests
 from utils import AbortableThread
@@ -19,6 +20,8 @@ def _round_to_nearest(value, round_to):
     return round(value / round_to) * round_to
 
 class TrainingSessionManager:
+    """Manages training sessions by creating, updating, and completing them."""
+
     def __init__(self, db_connection=None):
         if db_connection:
             self.conn = db_connection
@@ -53,8 +56,10 @@ class TrainingSessionManager:
         self.training_thread = None
 
     def initialize_database(self):
+        """Initializes the database by creating the training_sessions and epoch_losses tables."""
+
         cursor = self.conn.cursor()
-        
+
         # Create the new training_sessions table with a random ID
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS training_sessions (
@@ -80,12 +85,14 @@ class TrainingSessionManager:
             FOREIGN KEY (session_id) REFERENCES training_sessions (id)
         )
         ''')
-        
+
         self.conn.commit()
 
     def create_training_session(self, config):
+        """Creates a new training session with the given config, but does not start it."""
+
         cursor = self.conn.cursor()
-        
+
         # Load preset values from the external JSON file
         preset_config_path = os.path.join(os.path.dirname(__file__), 'sdxl_preset_config.json')
         with open(preset_config_path, 'r') as f:
@@ -110,7 +117,7 @@ class TrainingSessionManager:
             os.path.join(WORKING_FOLDER_ROOT, PRETRAINED_MODEL_PATH)
         ]:
             os.makedirs(dir_path, exist_ok=True)
-        
+
         # Ensure the generated ID is unique
         while cursor.execute('SELECT COUNT(*) FROM training_sessions WHERE id = ?', (session_id,)).fetchone()[0] > 0:
             session_id = random.randint(0, 2**32)
@@ -120,7 +127,7 @@ class TrainingSessionManager:
             id, start_time, config, last_updated, is_completed
         ) VALUES (?, ?, ?, ?, ?)
         '''
-        
+
         cursor.execute(insert_query, (
             session_id,
             time.time(),
@@ -128,14 +135,16 @@ class TrainingSessionManager:
             time.time(),
             False
         ))
-        
+
         self.conn.commit()
 
         return session_id
 
     def update_training_session(self, session_id, **kwargs):
+        """Updates a training session with the given kwargs provided they match one of the handled fields."""
+
         cursor = self.conn.cursor()
-        
+
         # Build dynamic update query based on kwargs
         update_fields = ['last_updated = ?']
         params = [time.time()]
@@ -143,21 +152,21 @@ class TrainingSessionManager:
         if 'status' in kwargs:
             update_fields.append('status = ?')
             params.append(kwargs['status'])
-        
+
         if 'remaining' in kwargs:
             update_fields.append('remaining = ?')
             params.append(kwargs['remaining'])
-        
+
         update_query = f'''
         UPDATE training_sessions
         SET {', '.join(update_fields)}
         WHERE id = ?
         '''
-        
+
         # append session_id last so it can be used in the WHERE clause
         params.append(session_id)
         cursor.execute(update_query, tuple(params))
-        
+
         # Record the epoch loss if provided
         if 'epoch' in kwargs and 'loss' in kwargs:
             self.record_epoch_loss(session_id, kwargs['epoch'], kwargs['loss'])
@@ -177,10 +186,12 @@ class TrainingSessionManager:
                     WHERE id = ?
                 ''', (json.dumps(existing_config), session_id))  # Convert to JSON string before storing
 
-       
+
         self.conn.commit()
 
     def fire_webhook(self, session_id):
+        """Fires a webhook call to the webhook URL defined in the training session config."""
+
         training_session = self.get_training_session(session_id)
         if training_session and 'webhook_url' in training_session['config']:
             webhook_url = training_session['config']['webhook_url']
@@ -194,37 +205,43 @@ class TrainingSessionManager:
                 print(f"Error during webhook call: {e}")
 
     def record_epoch_loss(self, session_id, epoch, loss):
+        """Records an epoch loss value in the database."""
+
         cursor = self.conn.cursor()
-        
+
         insert_query = '''
         INSERT INTO epoch_losses (session_id, epoch, loss) VALUES (?, ?, ?)
         '''
-        
+
         cursor.execute(insert_query, (session_id, epoch, loss))
         self.conn.commit()
 
     def complete_training_session(self, session_id, error_message=None):
-        cursor = self.conn.cursor()
-        
-        update_query = '''
-        UPDATE training_sessions
-        SET end_time = ?, is_completed = ?, last_error = ?, status = ?
-        WHERE id = ?
-        ''' 
-    
-        cursor.execute(update_query, (time.time(), error_message is None, error_message, "training_completed" if error_message is None else "training_failed", session_id))
-        self.conn.commit()
-        self.fire_webhook(session_id)
+        """Completes a training session by uploading the checkpoint with the lowest loss value to the S3 bucket."""
+
+        self.update_training_session(session_id, status="training_completed" if error_message is None else "training_failed")
 
         if not error_message:
             # Upload the checkpoint with the lowest loss to the S3 bucket
             self.upload_winning_checkpoint(session_id)
-        
+
         self.current_session_id = None
         self.training_process = None
         self.training_thread = None
 
+        if not error_message:
+            update_query = '''
+            UPDATE training_sessions
+            SET end_time = ?, is_completed = ?, status = ?
+            WHERE id = ?
+            '''
+            cursor = self.conn.cursor()
+            cursor.execute(update_query, (time.time(), True, "completed", session_id))
+            self.conn.commit()
+
     def upload_winning_checkpoint(self, session_id):
+        """Uploads the checkpoint with the lowest loss value to the configured upload URL."""
+
         training_session = self.get_training_session(session_id)
         if not training_session:
             raise Exception("Training session not found")
@@ -238,14 +255,18 @@ class TrainingSessionManager:
         self._upload_file(checkpoint_path, config['upload_url'], session_id)
 
     def get_all_training_sessions(self) -> list[dict]:
+        """Returns all training sessions from the database."""
+
         cursor = self.conn.cursor()
         cursor.row_factory = sqlite3.Row
         cursor.execute('SELECT * FROM training_sessions')
-       
+
         trainings = cursor.fetchall()
         return [self._process_row(row) for row in trainings]
 
     def get_training_session(self, session_id) -> dict | None:
+        """Returns a training session from the database by ID."""
+
         cursor = self.conn.cursor()
 
         cursor.row_factory = sqlite3.Row
@@ -254,6 +275,8 @@ class TrainingSessionManager:
         return self._process_row(training) if training else None
 
     def _process_row(self, row) -> dict | None:
+        """Processes a row from the database into a dictionary."""
+
         if row is None:
             print('row is None')
             return None
@@ -267,7 +290,7 @@ class TrainingSessionManager:
             processed = dict(zip(columns, row))
         else:
             raise ValueError(f"Unexpected row type: {type(row)}")
-        
+
         if 'config' in processed and processed['config']:
             try:
                 processed['config'] = json.loads(processed['config'])
@@ -277,8 +300,10 @@ class TrainingSessionManager:
         return processed
 
     def run_training(self, config, session_id) -> None:
+        """Runs the training with the given config and session ID. Requires a training to exist in the DB first. """
+
         cmd = ["python", self.script_path]
-        
+
         config['session_id'] = str(session_id)
 
         # strip config items that are not related to kohya but came from the original config posted to the API
@@ -288,7 +313,7 @@ class TrainingSessionManager:
         # Save config as TOML file in the session's directory
         config_path = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'config.toml')
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
-        
+
         with open(config_path, 'w') as f:
             toml.dump(config, f)
 
@@ -298,8 +323,8 @@ class TrainingSessionManager:
         print(f"Running command: {' '.join(cmd)}")  # Debug print
 
         self.training_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = self.training_process.communicate()
-        
+        _, stderr = self.training_process.communicate()
+
         # Fire webhook call
         self.fire_webhook(session_id)
 
@@ -312,6 +337,7 @@ class TrainingSessionManager:
             self.complete_training_session(session_id)
 
     def abort_training(self, session_id):
+        """Aborts a training session by terminating the subprocess and marking the session as completed."""
         training_session = self.get_training_session(session_id)
 
          # Check if the training session is already completed
@@ -324,18 +350,20 @@ class TrainingSessionManager:
 
         if self.training_thread is not None and self.training_thread.is_alive():
             self.training_thread.stop()  # Stop the training thread
-        
+
         self.complete_training_session(session_id, "Training aborted")  # Mark the session as completed
 
     def get_epoch_losses(self, session_id, order_by_loss=False) -> list[dict]:
+        """Returns the epoch losses for a given training session."""
+
         cursor = self.conn.cursor()
 
         select_query ='''
         SELECT epoch, loss FROM epoch_losses WHERE session_id = ? AND epoch > 0 ORDER BY ? ASC
         '''
-        
+
         cursor.execute(select_query, (session_id, 'loss' if order_by_loss else 'epoch'))
-        
+
         return cursor.fetchall()
 
     def __del__(self):
@@ -343,12 +371,14 @@ class TrainingSessionManager:
             self.conn.close()
 
     def download_and_run(self, config, session_id):
+        """Downloads the checkpoint and images and runs the training."""
+
         try:        # Download the checkpoint file in a separate thread
             civitai_key = config.get("civitai_key")  # Assume the API key is passed in the config
             checkpoint_url = config.get("checkpoint_url")  # URL for the checkpoint file
             checkpoint_filename = config.get("checkpoint_filename")
             output_path = config.get("pretrained_model_name_or_path")
-            
+
             downloaded_images = self.download_images(session_id)
 
             downloaded_checkpoint = self.download_checkpoint(civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename)
@@ -363,6 +393,8 @@ class TrainingSessionManager:
 
 
     def download_images(self, session_id):
+        """Downloads the images for a given training session."""
+
         training_session = self.get_training_session(session_id)
         if not training_session or 'config' not in training_session:
             raise Exception("Training session not found or config is missing")
@@ -378,14 +410,14 @@ class TrainingSessionManager:
 
         # Download to a temporary zip file
         zip_path = os.path.join(train_data_dir, 'images.zip')
-        
+
         self._download_file(
             url=training_images_url,
             output_path=zip_path,
             session_id=session_id,
             status_prefix="downloading_images"
         )
-        
+
         # Unzip the downloaded file
         repeats = training_session['config'].get('image_repeats', 1)
         trigger_word = training_session['config'].get('trigger_word', 'oxhw')
@@ -393,7 +425,7 @@ class TrainingSessionManager:
         os.makedirs(output_dir, exist_ok=True)
         shutil.unpack_archive(zip_path, output_dir)
         os.remove(zip_path)  # Clean up zip file after extraction
-        
+
         return True
 
     def _download_file(self, url, output_path, headers=None, session_id=None, status_prefix="downloading"):
@@ -462,7 +494,7 @@ class TrainingSessionManager:
 
                 if session_id:
                     self.update_training_session(session_id, status=f"{status_prefix}_completed")
-                    
+   
                 return True
             except Exception as e:
                 print(f"Error during download: {e}")
@@ -489,13 +521,13 @@ class TrainingSessionManager:
         # Set similar options to the working curl command
         curl.setopt(curl.UPLOAD, 1)  # Enable upload mode
         curl.setopt(curl.CAINFO, certifi.where())
-       
+
         try:
             self.update_training_session(session_id, status=f"{status_prefix}_started")
-            
+
             # Get file size for progress tracking
             filesize = os.path.getsize(file_path)
-            
+
             curl.setopt(curl.INFILESIZE, filesize)
             curl.setopt(curl.HTTPHEADER, [
                 'Content-Type: application/octet-stream',
@@ -506,16 +538,16 @@ class TrainingSessionManager:
             # Open the file for reading
             with open(file_path, 'rb') as file:
                 curl.setopt(curl.READDATA, file)
-                
+
                 # Create a container for the progress value that can be accessed from the nested function
                 progress_state = {'last_reported': 0}
-                
+
                 def progress_callback(total_to_download, downloaded, total_to_upload, uploaded):
                     if total_to_upload > 0:
                         # Only update the training session for every 5% progress
                         progress = (uploaded / total_to_upload) * 100
                         rounded_progress = _round_to_nearest(progress, 5)
-                        
+
                         if rounded_progress != progress_state['last_reported']:
                             progress_state['last_reported'] = rounded_progress
                             self.update_training_session(
@@ -524,21 +556,21 @@ class TrainingSessionManager:
                                 remaining=rounded_progress
                             )
                     return 0  # Return 0 to continue transfer
-                
+
                 # Set progress monitoring
                 curl.setopt(curl.NOPROGRESS, False)
                 curl.setopt(curl.XFERINFOFUNCTION, progress_callback)
-                
+
                 # Perform the upload
                 curl.perform()
-                
+
                 # Check response code
                 response_code = curl.getinfo(curl.RESPONSE_CODE)
                 if response_code != 200:
                     raise Exception(f"Upload failed with status code: {response_code}")
-                
+
                 self.update_training_session(session_id, status=f"{status_prefix}_completed")
-                
+
         except Exception as e:
             print(f"Error during upload: {e}")
             self.update_training_session(session_id, status=f"{status_prefix}_failed")
@@ -547,19 +579,21 @@ class TrainingSessionManager:
             curl.close()
 
     def download_checkpoint(self, civitai_key, checkpoint_url, output_path, session_id, checkpoint_filename):
+        """Downloads a checkpoint from a given URL and saves it to the output path."""
+
         headers = []
 
         # Check if a file of the same name already exists in the output path
         if os.path.exists(os.path.join(output_path, checkpoint_filename)):
             print(f"File {checkpoint_filename} already exists in {output_path}")
             return True
-        
+
         if "civitai.com" in checkpoint_url.lower():
             headers.append(f'Authorization: Bearer {civitai_key}')
             checkpoint_url += "&token=" + civitai_key if "?" in checkpoint_url else "?token=" + civitai_key
 
         file_path = os.path.join(output_path, checkpoint_filename)
-       
+
         return self._download_file(
             url=checkpoint_url,
             output_path=file_path,
@@ -569,7 +603,8 @@ class TrainingSessionManager:
         )
 
     def start_training(self, session_id) -> int:
-        # Get the training config
+        """Starts a training session by downloading the checkpoint and images and running the training."""
+
         training_session = self.get_training_session(session_id)
 
         # Check if the training session is already in progress or completed
@@ -591,10 +626,12 @@ class TrainingSessionManager:
             # Start the training in a separate thread
             self.training_thread = AbortableThread(self.download_and_run, config, session_id)
             self.training_thread.start()
-            
+
             return session_id
 
     def get_total_progress(self, session_id) -> float:
+        """Returns the total progress of a training session."""
+
         # Get the total number of epochs from the training config
         training_session = self.get_training_session(session_id)
         if training_session is None or 'config' not in training_session:
