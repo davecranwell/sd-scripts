@@ -550,9 +550,9 @@ class TrainingSessionManager:
 
                 def progress_callback(total_to_download, downloaded, total_to_upload, uploaded):
                     if total_to_upload > 0:
-                        # Only update the training session for every 5% progress
+                        # Only update for every 10% progress
                         progress = (uploaded / total_to_upload) * 100
-                        rounded_progress = _round_to_nearest(progress, 5)
+                        rounded_progress = _round_to_nearest(progress, 10)
 
                         if rounded_progress != progress_state['last_reported']:
                             progress_state['last_reported'] = rounded_progress

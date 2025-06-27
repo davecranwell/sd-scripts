@@ -1096,6 +1096,7 @@ class NetworkTrainer:
                     if args.save_state:
                         train_util.save_and_remove_state_on_epoch_end(args, accelerator, epoch + 1)
 
+            self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
             self.session_manager.update_training_session(
                 status='training_progress', 
                 session_id=session_id, 
@@ -1104,7 +1105,6 @@ class NetworkTrainer:
                 loss=loss.detach().item(),
                 remaining=progress_bar.format_dict['total'] - progress_bar.format_dict['n']
             )
-            self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
             # end of epoch
 
         # metadata["ss_epoch"] = str(num_train_epochs)
