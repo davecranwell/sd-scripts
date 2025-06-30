@@ -206,8 +206,6 @@ def create_app(session_manager=None):
             'civitai_key',
             'checkpoint_url',
             'checkpoint_filename',
-            'training_images_url',
-            'trigger_word',
         }
         
         # Validate incoming data
