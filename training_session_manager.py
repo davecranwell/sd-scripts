@@ -194,7 +194,6 @@ class TrainingSessionManager:
                     WHERE id = ?
                 ''', (json.dumps(existing_config), session_id))  # Convert to JSON string before storing
 
-
         self.conn.commit()
 
     def fire_webhook(self, session_id):
@@ -321,6 +320,13 @@ class TrainingSessionManager:
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         log_file = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'training.log')
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        
+        # save prompts to a file in the working folder and replace config sample promtps with path to file
+        prompts_path = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'prompts.txt')
+        os.makedirs(os.path.dirname(prompts_path), exist_ok=True)
+        with open(prompts_path, 'w', encoding='utf-8') as f:
+            f.write(config['sample_prompts'])
+        config['sample_prompts'] = prompts_path
 
         with open(config_path, 'w') as f:
             toml.dump(config, f)
