@@ -319,12 +319,15 @@ class TrainingSessionManager:
         # Save config as TOML file in the session's directory
         config_path = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'config.toml')
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        log_file = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'training.log')
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
         with open(config_path, 'w') as f:
             toml.dump(config, f)
 
         # Add the config file path to the command
         cmd.extend(["--config_file", config_path])
+        cmd.extend(["--console_log_file", log_file])
 
         print(f"Running command: {' '.join(cmd)}")  # Debug print
 
