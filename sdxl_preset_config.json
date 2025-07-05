@@ -13,7 +13,7 @@
     "caption_dropout_every_n_epochs": 0,
     "caption_dropout_rate": 0,
     "caption_extension": ".txt",
-    "clip_skip": 2,
+    "clip_skip": 1,
     "color_aug": false,
     "debiased_estimation_loss": false,
     "dim_from_weights": false,
@@ -31,7 +31,7 @@
     "keep_tokens": 1,
     "learning_rate": 0.0004,
     "loss_type": "l2",
-    "lr_scheduler": "cosine",
+    "lr_scheduler": "cosine_with_restarts",
     "lr_scheduler_num_cycles": 1,
     "lr_scheduler_power": 1,
     "lr_warmup": 10,
@@ -91,5 +91,6 @@
     "v_pred_like_loss": 0,
     "vae_batch_size": 0,
     "weighted_captions": false,
-    "xformers": true
+    "xformers": true,
+    "no_half_vae": true
 }
