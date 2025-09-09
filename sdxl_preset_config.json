@@ -29,7 +29,6 @@
     "ip_noise_gamma": 0,
     "ip_noise_gamma_random_strength": false,
     "keep_tokens": 1,
-    "learning_rate": 0.0004,
     "loss_type": "l2",
     "lr_scheduler": "cosine_with_restarts",
     "lr_scheduler_num_cycles": 1,
