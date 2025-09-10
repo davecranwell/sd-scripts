@@ -28,7 +28,7 @@ class TrainingSessionManager:
         else:
             try:
                 # Use the workspace directory which should be writable
-                workspace_dir = '/workspace'
+                workspace_dir = './workspace'
                 data_dir = os.path.join(workspace_dir, 'data')
                 os.makedirs(data_dir, exist_ok=True)
                 print(f"Data directory created/verified at: {data_dir}")
@@ -255,6 +255,8 @@ class TrainingSessionManager:
         epoch_losses = self.get_epoch_losses(session_id, order_by_loss=True)
         epoch, loss = epoch_losses[0]
 
+        print(f"Uploading epoch {epoch} with loss {loss}")
+
         config = training_session['config']
         checkpoint_path = os.path.join(config['output_dir'], f"{config['output_name']}-{str(epoch).zfill(6)}.safetensors")
         self._upload_file(checkpoint_path, config['upload_url'], session_id)
@@ -304,6 +306,24 @@ class TrainingSessionManager:
                 processed['config'] = {}
         return processed
 
+    def write_toml_config(self, config, session_id):
+        """Writes the config to a TOML file in the session's directory."""
+        config_path = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'config.toml')
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, 'w') as f:
+            toml.dump(config, f)
+
+        return config_path
+
+    def write_prompts_file(self, prompts, session_id):
+        """Writes the prompts to a file in the session's directory."""
+        prompts_path = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'prompts.txt')
+        os.makedirs(os.path.dirname(prompts_path), exist_ok=True)
+        with open(prompts_path, 'w', encoding='utf-8') as f:
+            f.write(prompts)
+
+        return prompts_path
+
     def run_training(self, config, session_id) -> None:
         """Runs the training with the given config and session ID. Requires a training to exist in the DB first. """
 
@@ -314,22 +334,16 @@ class TrainingSessionManager:
         # strip config items that are not related to kohya but came from the original config posted to the API
         for key in ["id", "webhook_url", "training_images_url", "checkpoint_url", "checkpoint_filename", "civitai_key", "trigger_word", "upload_url", "image_repeats"]:
             config.pop(key, None)
-
-        # Save config as TOML file in the session's directory
-        config_path = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'config.toml')
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    
         log_file = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'training.log')
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         
         # save prompts to a file in the working folder and replace config sample promtps with path to file
-        prompts_path = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'prompts.txt')
-        os.makedirs(os.path.dirname(prompts_path), exist_ok=True)
-        with open(prompts_path, 'w', encoding='utf-8') as f:
-            f.write(config['sample_prompts'])
+        prompts_path = self.write_prompts_file(config['sample_prompts'], session_id)
         config['sample_prompts'] = prompts_path
 
-        with open(config_path, 'w') as f:
-            toml.dump(config, f)
+        # Save config as TOML file in the session's directory
+        config_path = self.write_toml_config(config, session_id)
 
         # Add the config file path to the command
         cmd.extend(["--config_file", config_path])
