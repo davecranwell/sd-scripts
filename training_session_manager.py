@@ -334,6 +334,7 @@ class TrainingSessionManager:
         # Add the config file path to the command
         cmd.extend(["--config_file", config_path])
         cmd.extend(["--console_log_file", log_file])
+        cmd.extend(["--console_log_level", "DEBUG"])
 
         print(f"Running command: {' '.join(cmd)}")  # Debug print
 
