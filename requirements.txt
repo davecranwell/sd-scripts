@@ -8,7 +8,7 @@ opencv-python==4.7.0.68
 einops==0.7.0
 pytorch-lightning==1.9.0
 bitsandbytes==0.43.0
-prodigyopt==1.0
+prodigyopt==1.0 # neeeds an upgrade see https://github.com/kohya-ss/sd-scripts/blob/3e6935a07edcb944407840ef74fcaf6fcad352f7/requirements.txt
 lion-pytorch==0.0.6
 tensorboard
 safetensors==0.4.2
@@ -50,3 +50,4 @@ pytest==8.3.3
 pycurl==7.45.3
 requests
 certifi
+lycoris_lora==3.2.0.post2
