@@ -251,9 +251,12 @@ class TrainingSessionManager:
         if not training_session:
             raise Exception("Training session not found")
 
-        # get the epoch with the lowest loss
-        epoch_losses = self.get_epoch_losses(session_id, order_by_loss=True)
-        epoch, loss = epoch_losses[0]
+        # the winning epoch is the one with the lowest score in the last third of the checkpoints.
+        # there can be anomalies in the first half of training that causes low loss but with no actual quality.
+        epoch_losses = self.get_epoch_losses(session_id)
+        total_epochs = len(epoch_losses)
+        last_third_epochs = epoch_losses[total_epochs * 2 // 3:]
+        epoch, loss = min(last_third_epochs, key=lambda x: x[1])
 
         print(f"Uploading epoch {epoch} with loss {loss}")
 
@@ -332,7 +335,7 @@ class TrainingSessionManager:
         config['session_id'] = str(session_id)
 
         # strip config items that are not related to kohya but came from the original config posted to the API
-        for key in ["id", "webhook_url", "training_images_url", "checkpoint_url", "checkpoint_filename", "civitai_key", "trigger_word", "upload_url", "image_repeats"]:
+        for key in ["id", "webhook_url", "training_images_url", "checkpoint_url", "checkpoint_filename", "civitai_key", "trigger_word", "upload_url", "image_repeats", "subject_type"]:
             config.pop(key, None)
     
         log_file = os.path.join(WORKING_FOLDER_ROOT, str(session_id), 'training.log')
@@ -451,7 +454,8 @@ class TrainingSessionManager:
         # Unzip the downloaded file
         repeats = training_session['config'].get('image_repeats', 1)
         trigger_word = training_session['config'].get('trigger_word', 'oxhw')
-        output_dir = os.path.join(train_data_dir, f"{repeats}_{trigger_word}")
+        subject_type = training_session['config'].get('subject_type', 'person')
+        output_dir = os.path.join(train_data_dir, f"{repeats}_{trigger_word}_{subject_type}")
         os.makedirs(output_dir, exist_ok=True)
         shutil.unpack_archive(zip_path, output_dir)
         os.remove(zip_path)  # Clean up zip file after extraction

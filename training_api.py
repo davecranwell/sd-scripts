@@ -167,6 +167,7 @@ def create_app(session_manager=None):
                             'checkpoint_filename': {'type': 'string', 'required': True},
                             'training_images_url': {'type': 'string', 'required': True},
                             'trigger_word': {'type': 'string', 'required': True},
+                            'subject_type': {'type': 'string', 'required': True},
                             'upload_url': {'type': 'string', 'required': True},
                         },
                         'additionalProperties': True
